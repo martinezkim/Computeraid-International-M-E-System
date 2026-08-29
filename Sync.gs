@@ -119,8 +119,20 @@ function buildBootstrapPayload_(device) {
     .filter(function (s) { return s.HubID === device.HubID && s.Status === 'Open'; })
     .map(function (s) { return s.ComputerID; });
 
-  var activityOptionsResult = getActivityOptions();
-  var visitorTypeOptionsResult = getVisitorTypeOptions();
+  // Read directly rather than through getActivityOptions()/getVisitorTypeOptions()
+  // — those require a logged-in user sessionToken (requireIdentity_), but this
+  // whole payload is built for a kiosk device authenticated separately via its
+  // device ID/API key, with no user session at all. Calling them bare (no
+  // token) always failed silently and fell back to an empty list; every other
+  // field here already reads its table directly for the same reason.
+  var activities = DB.getAll(ACTIVITIES_TABLE)
+    .filter(function (a) { return a.Active === true || a.Active === 'true'; })
+    .sort(function (a, b) { return (Number(a.SortOrder) || 0) - (Number(b.SortOrder) || 0); })
+    .map(function (a) { return { id: a.ActivityID, name: a.Name, category: a.Category }; });
+  var visitorTypes = DB.getAll(VISITOR_TYPES_TABLE)
+    .filter(function (v) { return v.Active === true || v.Active === 'true'; })
+    .sort(function (a, b) { return (Number(a.SortOrder) || 0) - (Number(b.SortOrder) || 0); })
+    .map(function (v) { return { id: v.VisitorTypeID, name: v.Name }; });
   var schedule = getHubScheduleForHub_(device.HubID);
 
   return {
@@ -129,8 +141,8 @@ function buildBootstrapPayload_(device) {
     beneficiaries: beneficiaries,
     computers: computers,
     openSessionComputerIds: openSessionComputerIds,
-    activities: activityOptionsResult.success ? activityOptionsResult.data : [],
-    visitorTypes: visitorTypeOptionsResult.success ? visitorTypeOptionsResult.data : [],
+    activities: activities,
+    visitorTypes: visitorTypes,
     // Named distinctly from openSessionComputerIds above — these are
     // Hub-Manager-activated Projects a beneficiary can one-tap join,
     // unrelated to computer sessions. Replaces the old
