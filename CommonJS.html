@@ -1,0 +1,345 @@
+<script>
+  /**
+   * ============================================================
+   * SPA SHELL UTILITIES
+   * ============================================================
+   * Everything here assumes the full app shell is present
+   * (#main-content, #sidebar, #page-title, #current-user-email).
+   * Generic helpers with no such dependency live in CoreJS.html
+   * instead, so they can also be used by the standalone Login.html /
+   * ResetPassword.html pages.
+   * ============================================================
+   */
+
+  var PAGE_TITLES = {
+    dashboard: 'Dashboard',
+    countries: 'Countries',
+    hubs: 'Hubs',
+    managers: 'Hub Managers',
+    quotas: 'Reporting Quotas',
+    projects: 'Submitted Reports',
+    myprojects: 'My Projects',
+    inventorysummary: 'Inventory Summary',
+    inventoryhub: 'Inventory at the Hub',
+    laptopsale: 'Laptops for Sale',
+    admininventory: 'All Inventory',
+    auditlog: 'Audit Log',
+    usageconfig: 'Usage Module Settings',
+    beneficiaries: 'Beneficiaries',
+    mybeneficiaries: 'Beneficiaries',
+    hubusage: 'Hub Usage',
+    myhubusage: 'Hub Usage',
+    usageoverview: 'Usage Overview',
+    syncdevices: 'Sync Devices',
+    financeconfig: 'Finance Settings',
+    financedashboard: 'Financial Dashboard',
+    financeaccounts: 'Bank Accounts & Funding',
+    myfinance: 'Finance',
+    expenses: 'Expenses & Reimbursements',
+    myexpenses: 'Expenses & Reimbursements',
+    financereports: 'Financial Reports',
+    mydevices: 'My Devices',
+    myprofile: 'My Profile'
+  };
+
+  var MNE_SESSION_KEY = 'mne_session_token';
+  var MNE_LAST_PAGE_KEY = 'mne_last_page';
+
+  /**
+   * Loads a page fragment into #main-content without a full page
+   * reload, updates the active sidebar link + title, then fires
+   * a 'page:loaded' event so the relevant module JS can init.
+   */
+  function loadPage(pageKey) {
+    var content = document.getElementById('main-content');
+    content.innerHTML = '<div class="page-loader"><div class="spinner-border" role="status"></div></div>';
+    var token = localStorage.getItem(MNE_SESSION_KEY);
+
+    google.script.run
+      .withSuccessHandler(function (html) {
+        content.innerHTML = html;
+        content.classList.remove('animate-pop-in');
+        void content.offsetWidth; // restart the animation on every page swap
+        content.classList.add('animate-pop-in');
+
+        // IMPORTANT: the pop-in animation uses `transform`. As long as that
+        // class (and its transform) stays on #main-content, it becomes the
+        // positioning anchor for every position:fixed descendant — which
+        // breaks Bootstrap modals (they render trapped inside this box
+        // instead of covering the viewport). Strip the class the moment
+        // the animation ends so #main-content returns to a plain, untransformed
+        // element before the user can open any modal inside it.
+        content.addEventListener('animationend', function clearAnim() {
+          content.classList.remove('animate-pop-in');
+          content.removeEventListener('animationend', clearAnim);
+        }, { once: true });
+        // Safety net: force the class off even if animationend never fires
+        // (e.g. tab was backgrounded mid-animation).
+        setTimeout(function () { content.classList.remove('animate-pop-in'); }, 400);
+
+        // 'dashboard' is shared by both roles — Router.gs serves a different
+        // fragment per role (admin's 5-card summary vs. the Hub Manager's
+        // 3-card summary), but the title is the same either way.
+        document.getElementById('page-title').textContent = PAGE_TITLES[pageKey] || 'M&E System';
+        setActiveNav(pageKey);
+        // The browser's top-level URL never changes as you navigate this
+        // SPA (loadPage swaps #main-content only, it doesn't touch the
+        // address bar — and it can't: this app runs inside Apps Script's
+        // cross-origin googleusercontent.com iframe, which isn't allowed
+        // to rewrite the parent script.google.com URL without a full
+        // reload). So the address bar stays pinned at whatever page the
+        // session started on (always ?page=dashboard, set by Login.html's
+        // post-auth redirect) — refreshing always re-requests THAT. To
+        // make a refresh land back where you actually were, remember the
+        // current page here; Index.html's boot script checks this instead
+        // of blindly trusting the URL's stale page param.
+        localStorage.setItem(MNE_LAST_PAGE_KEY, pageKey);
+        document.dispatchEvent(new CustomEvent('page:loaded', { detail: { page: pageKey } }));
+      })
+      .withFailureHandler(function (err) {
+        content.innerHTML = '<div class="alert alert-danger m-4">Failed to load page: ' + err.message + '</div>';
+      })
+      .getPageContent(pageKey, token);
+  }
+
+  function setActiveNav(pageKey) {
+    document.querySelectorAll('.nav-link[data-page]').forEach(function (link) {
+      link.classList.toggle('active', link.dataset.page === pageKey);
+    });
+    document.getElementById('sidebar').classList.remove('open');
+  }
+
+  document.addEventListener('click', function (e) {
+    var link = e.target.closest('.nav-link[data-page]');
+    if (link && !link.classList.contains('disabled')) {
+      e.preventDefault();
+      loadPage(link.dataset.page);
+    }
+  });
+
+  var toggleBtn = document.getElementById('sidebar-toggle');
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', function () {
+      document.getElementById('sidebar').classList.toggle('open');
+    });
+  }
+
+  /**
+   * ============================================================
+   * TOP-NAV IDENTITY & ROLE-BASED NAV
+   * ============================================================
+   * Both Admins and Hub Managers authenticate with real credentials
+   * (email + password) via Login.html, which stores a single session
+   * token in localStorage (Apps Script's HtmlService has no server-side
+   * cookie session of its own). Index.html resolves that token to an
+   * identity via the role-agnostic getIdentity() (see SessionService.gs)
+   * *before* this file's loadPage() ever runs, then calls applyIdentity()
+   * below to paint the top nav and filter the sidebar.
+   *
+   * Sidebar links admin-only pages with data-roles="Admin" (see
+   * Sidebar.html); anything without a data-roles attribute is visible
+   * to everyone. The 'dashboard' page key is shared by both roles but
+   * Router.gs serves a different HTML fragment for each — see the
+   * comment on getPageContent() in Router.gs. Admin-only pages are also
+   * refused server-side for non-admins, not just hidden here — hiding a
+   * link is a UX nicety, not the actual access control.
+   * ============================================================
+   */
+  window.MNE_CURRENT_USER = null;
+
+  /**
+   * Labels shown wherever an Admin's specific role needs to read out
+   * (topnav chip, welcome copy) \u2014 kept in sync with ADMIN_ACCESS_LEVELS
+   * in AdminAuth.gs. A HubManager has no AccessLevel, so this only ever
+   * applies to role === 'Admin'.
+   */
+  var ACCESS_LEVEL_LABELS_ = { SuperAdmin: 'Super Admin', CountryDirector: 'Country Director', MELead: 'M&E Lead', Accountant: 'Accountant' };
+
+  /** Called once by Index.html's session gate after a successful getIdentity(). */
+  function applyIdentity(identity) {
+    window.MNE_CURRENT_USER = identity;
+    var chip = document.getElementById('current-user-email');
+    if (chip) {
+      var roleLabel = identity.role === 'Admin'
+        ? (ACCESS_LEVEL_LABELS_[identity.accessLevel] || 'Admin')
+        : 'Hub Manager';
+      chip.textContent = identity.fullName + ' \u00b7 ' + roleLabel;
+
+      var avatarImg = document.getElementById('topnav-avatar-img');
+      var avatarIcon = document.getElementById('topnav-avatar-icon');
+      if (avatarImg && avatarIcon) {
+        if (identity.photoUrl) {
+          avatarImg.src = identity.photoUrl;
+          avatarImg.style.display = 'block';
+          avatarIcon.style.display = 'none';
+        } else {
+          avatarImg.style.display = 'none';
+          avatarIcon.style.display = '';
+        }
+      }
+      // Hub Manager's own account chip doubles as the "My Profile" link \u2014
+      // moved here from a standalone sidebar entry. .onclick (not
+      // addEventListener) so re-running applyIdentity doesn't stack
+      // duplicate handlers. No-op for Admin \u2014 there's no admin-facing
+      // profile page (yet), so the chip is just a display for them.
+      var chipWrap = chip.closest('.user-chip') || chip;
+      if (identity.role === 'HubManager') {
+        chipWrap.style.cursor = 'pointer';
+        chipWrap.title = 'My Profile';
+        chipWrap.onclick = function () { loadPage('myprofile'); };
+      } else {
+        chipWrap.style.cursor = '';
+        chipWrap.title = '';
+        chipWrap.onclick = null;
+      }
+    }
+    var logoutBtn = document.getElementById('btn-logout');
+    if (logoutBtn) logoutBtn.classList.remove('d-none');
+
+    applyRoleVisibility(identity);
+    startIdleTimer();
+    if (window.initNotifications) window.initNotifications();
+    if (window.initDeviceRequests) window.initDeviceRequests();
+    if (window.initChat) window.initChat();
+  }
+
+  /**
+   * Hides any sidebar element (nav links, section labels) restricted to
+   * other roles, same as before. For a HubManager, any nav-link marked
+   * data-optional="true" (see Sidebar.html) whose page key isn't in
+   * identity.enabledTabs (set server-side per hub — see
+   * getHubEnabledTabs_ in Hubs.gs) is fully HIDDEN, same treatment as
+   * an Admin's data-access-restricted links below — a Hub Manager just
+   * doesn't see a tab they don't have, rather than seeing a greyed-out
+   * locked one. For an Admin, any nav-link marked with a data-access
+   * allowlist (see ACCESS_LEVEL_RESTRICTED_PAGES in Router.gs) is
+   * likewise hidden for an AccessLevel not in that list. A now-empty
+   * section label (every link under it hidden) is hidden too, so nobody
+   * sees a bare heading with nothing underneath. This is all a UX
+   * nicety only — getPageContent in Router.gs is the real enforcement
+   * point even if this were bypassed.
+   */
+  function applyRoleVisibility(identity) {
+    var role = identity.role;
+    var enabledTabs = identity.enabledTabs || [];
+    var accessLevel = identity.accessLevel;
+
+    document.querySelectorAll('[data-roles]').forEach(function (el) {
+      var allowedRoles = el.dataset.roles.split(',');
+      el.classList.toggle('d-none', allowedRoles.indexOf(role) === -1);
+    });
+
+    document.querySelectorAll('.nav-link[data-optional="true"]').forEach(function (link) {
+      if (link.classList.contains('d-none')) return; // already hidden by the data-roles pass — leave it
+      var hidden = role === 'HubManager' && enabledTabs.indexOf(link.dataset.page) === -1;
+      link.classList.toggle('d-none', hidden);
+    });
+
+    document.querySelectorAll('.nav-link[data-access]').forEach(function (link) {
+      if (link.classList.contains('d-none')) return; // already hidden by the data-roles pass — leave it
+      var allowedLevels = link.dataset.access.split(',');
+      var hidden = role === 'Admin' && allowedLevels.indexOf(accessLevel) === -1;
+      link.classList.toggle('d-none', hidden);
+    });
+
+    document.querySelectorAll('.nav-section-label').forEach(function (label) {
+      if (label.classList.contains('d-none')) return; // already hidden by the data-roles pass
+      var anyVisible = false;
+      var sib = label.nextElementSibling;
+      while (sib && !sib.classList.contains('nav-section-label')) {
+        if (sib.classList.contains('nav-link') && !sib.classList.contains('d-none')) anyVisible = true;
+        sib = sib.nextElementSibling;
+      }
+      label.classList.toggle('d-none', !anyVisible);
+    });
+  }
+
+  /**
+   * Ends the current session (server + local) and sends the browser to
+   * the login page. Shared by the manual "sign out" button and the idle
+   * timer below, with an optional `reason` query param so Login.html
+   * can explain why the person landed there.
+   */
+  function performLogout(reason) {
+    var token = localStorage.getItem(MNE_SESSION_KEY);
+    localStorage.removeItem(MNE_SESSION_KEY);
+    localStorage.removeItem(MNE_LAST_PAGE_KEY);
+    var suffix = reason ? ('&reason=' + encodeURIComponent(reason)) : '';
+    var goToLogin = function () {
+      goToTopUrl(WEB_APP_URL + '?page=login' + suffix);
+    };
+    if (token) {
+      runServer('logout', token).then(goToLogin).catch(goToLogin);
+    } else {
+      goToLogin();
+    }
+  }
+
+  var logoutBtn = document.getElementById('btn-logout');
+  if (logoutBtn) {
+    logoutBtn.addEventListener('click', function () { performLogout(); });
+  }
+
+  /**
+   * ============================================================
+   * IDLE TIMEOUT
+   * ============================================================
+   * After 5 minutes with no mouse/keyboard/touch activity, whoever's
+   * signed in — Admin or Hub Manager — is automatically logged out.
+   * A warning banner appears 30 seconds before that happens, with a
+   * "Stay Signed In" button that resets the clock. This is a client-
+   * side convenience layer on top of the server-side session lifetime
+   * (SESSION_HOURS in Config.gs, currently much longer) — it protects
+   * an unattended, already-unlocked browser, not the session itself.
+   * ============================================================
+   */
+  var IDLE_LIMIT_MS = 5 * 60 * 1000;      // 5 minutes
+  var IDLE_WARNING_LEAD_MS = 30 * 1000;   // show the banner 30s before logout
+  var idleWarningTimer, idleLogoutTimer, lastIdleReset = 0;
+
+  function startIdleTimer() {
+    resetIdleTimers();
+    ['click', 'mousemove', 'keydown', 'scroll', 'touchstart'].forEach(function (evt) {
+      document.addEventListener(evt, handleIdleActivity, { passive: true });
+    });
+
+    var stayBtn = document.getElementById('idle-stay-logged-in-btn');
+    if (stayBtn) stayBtn.addEventListener('click', resetIdleTimers);
+  }
+
+  function handleIdleActivity() {
+    // Throttled — mousemove/scroll fire constantly, and resetting two
+    // timers on every single event is wasted work.
+    var now = Date.now();
+    if (now - lastIdleReset < 1000) return;
+    lastIdleReset = now;
+    resetIdleTimers();
+  }
+
+  function resetIdleTimers() {
+    hideIdleWarning();
+    clearTimeout(idleWarningTimer);
+    clearTimeout(idleLogoutTimer);
+    idleWarningTimer = setTimeout(showIdleWarning, IDLE_LIMIT_MS - IDLE_WARNING_LEAD_MS);
+    idleLogoutTimer = setTimeout(function () { performLogout('timeout'); }, IDLE_LIMIT_MS);
+  }
+
+  function showIdleWarning() {
+    var banner = document.getElementById('idle-warning-banner');
+    if (!banner) return;
+    document.getElementById('idle-warning-text').textContent =
+      'You\u2019ll be signed out in ' + Math.round(IDLE_WARNING_LEAD_MS / 1000) + ' seconds due to inactivity.';
+    banner.classList.remove('d-none');
+    // Force a reflow between removing d-none and adding .show so the
+    // slide-down CSS transition actually plays instead of snapping in.
+    void banner.offsetWidth;
+    banner.classList.add('show');
+  }
+
+  function hideIdleWarning() {
+    var banner = document.getElementById('idle-warning-banner');
+    if (!banner) return;
+    banner.classList.remove('show');
+    setTimeout(function () { banner.classList.add('d-none'); }, 250);
+  }
+</script>

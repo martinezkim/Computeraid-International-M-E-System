@@ -1,0 +1,273 @@
+<script>
+(function () {
+  var categoryModal, staffModal, deleteModal, exchangeRateModal;
+  var pendingDelete; // { kind, id, name }
+  var hubOptionsCache = [];
+  var systemCurrencyCode = 'KES';
+  var currencyCatalogCache = [];
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'financeconfig') return;
+    if (!window.MNE_CURRENT_USER || window.MNE_CURRENT_USER.role !== 'Admin') return;
+    initFinanceConfigPage();
+  });
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  function initFinanceConfigPage() {
+    categoryModal = new bootstrap.Modal(document.getElementById('financeCategoryModal'));
+    staffModal = new bootstrap.Modal(document.getElementById('financeStaffModal'));
+    deleteModal = new bootstrap.Modal(document.getElementById('financeConfigDeleteModal'));
+    exchangeRateModal = new bootstrap.Modal(document.getElementById('exchangeRateModal'));
+
+    document.querySelectorAll('.pill-tab').forEach(function (tab) {
+      tab.addEventListener('click', function () { switchTab(tab.dataset.tab); });
+    });
+
+    document.getElementById('btn-add-category').addEventListener('click', openAddCategory);
+    document.getElementById('financecategory-form').addEventListener('submit', handleSaveCategory);
+
+    document.getElementById('btn-add-staff').addEventListener('click', openAddStaff);
+    document.getElementById('financestaff-form').addEventListener('submit', handleSaveStaff);
+
+    document.getElementById('btn-add-exchangerate').addEventListener('click', openAddExchangeRate);
+    document.getElementById('exchangerate-form').addEventListener('submit', handleSaveExchangeRate);
+    document.getElementById('exchangerate-currencycode').addEventListener('change', updateRateHint);
+
+    document.getElementById('confirm-delete-financeconfig').addEventListener('click', handleConfirmDelete);
+
+    Promise.all([loadHubOptions(), loadCurrencyCatalog()]).then(fetchCategories);
+  }
+
+  function loadCurrencyCatalog() {
+    return runServer('getSystemCurrency', token()).then(function (res) {
+      if (!res.success) return;
+      systemCurrencyCode = res.data.code;
+      currencyCatalogCache = (res.data.catalog || []).filter(function (c) { return c.code !== systemCurrencyCode; });
+      document.getElementById('exchangerate-currencycode').innerHTML = currencyCatalogCache
+        .map(function (c) { return '<option value="' + c.code + '">' + c.code + ' — ' + escapeHtml(c.name) + '</option>'; }).join('');
+      updateRateHint();
+    });
+  }
+
+  function updateRateHint() {
+    var code = document.getElementById('exchangerate-currencycode').value;
+    document.getElementById('exchangerate-rate-hint').textContent = '(1 ' + code + ' = ? ' + systemCurrencyCode + ')';
+  }
+
+  function loadHubOptions() {
+    return runServer('getHubOptions', token()).then(function (res) {
+      if (!res.success) return;
+      hubOptionsCache = res.data;
+      document.getElementById('financestaff-hubid').innerHTML = hubOptionsCache
+        .map(function (h) { return '<option value="' + h.id + '">' + escapeHtml(h.name) + '</option>'; }).join('');
+    });
+  }
+
+  function switchTab(tabKey) {
+    document.querySelectorAll('.pill-tab').forEach(function (t) { t.classList.toggle('active', t.dataset.tab === tabKey); });
+    document.querySelectorAll('.usage-config-pane').forEach(function (p) { p.classList.add('d-none'); });
+    document.getElementById('pane-' + tabKey).classList.remove('d-none');
+    if (tabKey === 'categories') fetchCategories();
+    if (tabKey === 'staff') fetchStaff();
+    if (tabKey === 'exchangerates') fetchExchangeRates();
+  }
+
+  // ---------- Categories ----------
+  function fetchCategories() {
+    runServer('getFinanceCategories', token(), { page: 1, pageSize: 1000 }).then(function (res) {
+      var tbody = document.getElementById('categories-table-body');
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="4" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      var records = res.data.records;
+      if (!records.length) { tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-4">No categories yet.</td></tr>'; return; }
+      tbody.innerHTML = records.map(function (c) {
+        var badge = c.Active === true || c.Active === 'true' ? 'badge-active' : 'badge-inactive';
+        return '<tr>' +
+          '<td class="fw-medium">' + escapeHtml(c.Name) + '</td>' +
+          '<td>' + escapeHtml(c.Type) + '</td>' +
+          '<td><span class="badge ' + badge + '">' + (c.Active === true || c.Active === 'true' ? 'Active' : 'Inactive') + '</span></td>' +
+          '<td class="text-end">' +
+            '<button class="btn btn-sm btn-light me-1" onclick="FinanceConfig.editCategory(\'' + c.CategoryID + '\')" title="Edit"><i class="bi bi-pencil"></i></button>' +
+            '<button class="btn btn-sm btn-light text-danger" onclick="FinanceConfig.promptDelete(\'category\', \'' + c.CategoryID + '\', \'' + escapeHtml(c.Name).replace(/'/g, "\\'") + '\')" title="Delete"><i class="bi bi-trash"></i></button>' +
+          '</td>' +
+        '</tr>';
+      }).join('');
+    });
+  }
+
+  function openAddCategory() {
+    document.getElementById('financecategory-form').reset();
+    document.getElementById('financecategory-id').value = '';
+    document.getElementById('financecategory-type').value = 'Expense';
+    document.getElementById('financecategory-active').checked = true;
+    document.getElementById('financeCategoryModalLabel').textContent = 'Add Category';
+    categoryModal.show();
+  }
+
+  function handleSaveCategory(e) {
+    e.preventDefault();
+    var id = document.getElementById('financecategory-id').value;
+    var data = {
+      Name: document.getElementById('financecategory-name').value.trim(),
+      Type: document.getElementById('financecategory-type').value,
+      Active: document.getElementById('financecategory-active').checked
+    };
+    var call = id ? runServer('updateFinanceCategory', token(), id, data) : runServer('addFinanceCategory', token(), data);
+    call.then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      categoryModal.hide();
+      showToast('Category saved.', 'success');
+      fetchCategories();
+    });
+  }
+
+  // ---------- Staff ----------
+  function fetchStaff() {
+    runServer('getFinanceStaff', token(), { page: 1, pageSize: 1000 }).then(function (res) {
+      var tbody = document.getElementById('staff-table-body');
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="6" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      var records = res.data.records;
+      if (!records.length) { tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">No staff added yet.</td></tr>'; return; }
+      tbody.innerHTML = records.map(function (s) {
+        var badge = s.Status === 'Active' ? 'badge-active' : 'badge-inactive';
+        return '<tr>' +
+          '<td class="fw-medium">' + escapeHtml(s.FullName) + '</td>' +
+          '<td>' + escapeHtml(s.StaffNumber || '') + '</td>' +
+          '<td>' + escapeHtml(s.RoleTitle || '') + '</td>' +
+          '<td>' + escapeHtml(s.HubName || '') + '</td>' +
+          '<td><span class="badge ' + badge + '">' + escapeHtml(s.Status) + '</span></td>' +
+          '<td class="text-end">' +
+            '<button class="btn btn-sm btn-light me-1" onclick="FinanceConfig.editStaff(\'' + s.StaffID + '\')" title="Edit"><i class="bi bi-pencil"></i></button>' +
+            '<button class="btn btn-sm btn-light text-danger" onclick="FinanceConfig.promptDelete(\'staff\', \'' + s.StaffID + '\', \'' + escapeHtml(s.FullName).replace(/'/g, "\\'") + '\')" title="Delete"><i class="bi bi-trash"></i></button>' +
+          '</td>' +
+        '</tr>';
+      }).join('');
+    });
+  }
+
+  function openAddStaff() {
+    document.getElementById('financestaff-form').reset();
+    document.getElementById('financestaff-id').value = '';
+    document.getElementById('financestaff-status').value = 'Active';
+    document.getElementById('financeStaffModalLabel').textContent = 'Add Staff';
+    staffModal.show();
+  }
+
+  function handleSaveStaff(e) {
+    e.preventDefault();
+    var id = document.getElementById('financestaff-id').value;
+    var data = {
+      FullName: document.getElementById('financestaff-fullname').value.trim(),
+      StaffNumber: document.getElementById('financestaff-staffnumber').value.trim(),
+      RoleTitle: document.getElementById('financestaff-roletitle').value.trim(),
+      HubID: document.getElementById('financestaff-hubid').value,
+      Email: document.getElementById('financestaff-email').value.trim(),
+      Status: document.getElementById('financestaff-status').value
+    };
+    var call = id ? runServer('updateFinanceStaff', token(), id, data) : runServer('addFinanceStaff', token(), data);
+    call.then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      staffModal.hide();
+      showToast('Staff record saved.', 'success');
+      fetchStaff();
+    });
+  }
+
+  // ---------- Exchange Rates ----------
+  function fetchExchangeRates() {
+    runServer('getExchangeRates', token(), { page: 1, pageSize: 1000 }).then(function (res) {
+      var tbody = document.getElementById('exchangerates-table-body');
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="6" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      var records = res.data.records;
+      if (!records.length) { tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">No rates logged yet — the Financial Dashboard will show each currency separately until one is added.</td></tr>'; return; }
+      tbody.innerHTML = records.map(function (r) {
+        return '<tr>' +
+          '<td class="fw-medium">' + escapeHtml(r.CurrencyCode) + '</td>' +
+          '<td class="text-end">' + Number(r.Rate).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) + '</td>' +
+          '<td class="small text-muted">1 ' + escapeHtml(r.CurrencyCode) + ' = ' + Number(r.Rate).toLocaleString('en-US', { maximumFractionDigits: 4 }) + ' ' + escapeHtml(systemCurrencyCode) + '</td>' +
+          '<td>' + escapeHtml(r.RateDate) + '</td>' +
+          '<td>' + escapeHtml(r.Source || '') + '</td>' +
+          '<td class="small text-muted">' + escapeHtml(r.EnteredByEmail || '') + '</td>' +
+        '</tr>';
+      }).join('');
+    });
+  }
+
+  function openAddExchangeRate() {
+    document.getElementById('exchangerate-form').reset();
+    document.getElementById('exchangerate-ratedate').value = new Date().toISOString().slice(0, 10);
+    updateRateHint();
+    exchangeRateModal.show();
+  }
+
+  function handleSaveExchangeRate(e) {
+    e.preventDefault();
+    var data = {
+      CurrencyCode: document.getElementById('exchangerate-currencycode').value,
+      Rate: document.getElementById('exchangerate-rate').value,
+      RateDate: document.getElementById('exchangerate-ratedate').value,
+      Source: document.getElementById('exchangerate-source').value.trim()
+    };
+    var btn = document.getElementById('exchangerate-save-btn');
+    btn.disabled = true;
+    runServer('setExchangeRate', token(), data).then(function (res) {
+      btn.disabled = false;
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      exchangeRateModal.hide();
+      showToast('Exchange rate logged.', 'success');
+      fetchExchangeRates();
+    }).catch(function (err) { btn.disabled = false; showToast(err.message, 'danger'); });
+  }
+
+  // ---------- Delete (shared) ----------
+  function handleConfirmDelete() {
+    if (!pendingDelete) return;
+    var fnByKind = { category: 'deleteFinanceCategory', staff: 'deleteFinanceStaff' };
+    runServer(fnByKind[pendingDelete.kind], token(), pendingDelete.id).then(function (res) {
+      deleteModal.hide();
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Deleted.', 'success');
+      if (pendingDelete.kind === 'category') fetchCategories();
+      if (pendingDelete.kind === 'staff') fetchStaff();
+    });
+  }
+
+  // ---------- Exposed to inline onclick handlers ----------
+  window.FinanceConfig = {
+    editCategory: function (id) {
+      runServer('getFinanceCategories', token(), { page: 1, pageSize: 1000 }).then(function (res) {
+        if (!res.success) return;
+        var c = res.data.records.find(function (r) { return r.CategoryID === id; });
+        if (!c) return;
+        document.getElementById('financecategory-id').value = c.CategoryID;
+        document.getElementById('financecategory-name').value = c.Name;
+        document.getElementById('financecategory-type').value = c.Type;
+        document.getElementById('financecategory-active').checked = c.Active === true || c.Active === 'true';
+        document.getElementById('financeCategoryModalLabel').textContent = 'Edit Category';
+        categoryModal.show();
+      });
+    },
+    editStaff: function (id) {
+      runServer('getFinanceStaff', token(), { page: 1, pageSize: 1000 }).then(function (res) {
+        if (!res.success) return;
+        var s = res.data.records.find(function (r) { return r.StaffID === id; });
+        if (!s) return;
+        document.getElementById('financestaff-id').value = s.StaffID;
+        document.getElementById('financestaff-fullname').value = s.FullName;
+        document.getElementById('financestaff-staffnumber').value = s.StaffNumber || '';
+        document.getElementById('financestaff-roletitle').value = s.RoleTitle || '';
+        document.getElementById('financestaff-hubid').value = s.HubID;
+        document.getElementById('financestaff-email').value = s.Email || '';
+        document.getElementById('financestaff-status').value = s.Status;
+        document.getElementById('financeStaffModalLabel').textContent = 'Edit Staff';
+        staffModal.show();
+      });
+    },
+    promptDelete: function (kind, id, name) {
+      pendingDelete = { kind: kind, id: id, name: name };
+      document.getElementById('delete-financeconfig-name').textContent = name;
+      deleteModal.show();
+    }
+  };
+})();
+</script>

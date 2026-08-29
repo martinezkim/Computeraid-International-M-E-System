@@ -1,0 +1,404 @@
+<script>
+(function () {
+  var visitsState = { search: '', sortBy: 'Date', sortDir: 'desc', page: 1, pageSize: 10 };
+  var sessionsState = { sortBy: 'LoginTime', sortDir: 'desc', page: 1, pageSize: 10 };
+  var recordVisitModal, manualSessionModal;
+  var activityOptions = [];
+  var visitorTypeOptions = [];
+  var selectedBeneficiaryId = null;
+  var manualSelectedBeneficiaryId = null;
+  var computersCache = [];
+  var openSessionsByComputer = {};
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'myhubusage') return;
+    if (!window.MNE_CURRENT_USER || window.MNE_CURRENT_USER.role !== 'HubManager') return;
+    initMyHubUsagePage();
+  });
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  /**
+   * Today's date and current time as the BROWSER's own local calendar/clock
+   * sees them. Deliberately not `new Date().toISOString()` — that always
+   * converts to UTC, which silently shows the wrong date near midnight and
+   * always shows the wrong time (by exactly the local UTC offset) for
+   * anywhere not on UTC — e.g. it pre-filled "18:xx" on a desktop reading
+   * 21:xx local, and could even roll the date back a day depending on time
+   * of day.
+   */
+  function localDateTimeParts_() {
+    var d = new Date();
+    var pad = function (n) { return n < 10 ? '0' + n : String(n); };
+    return {
+      date: d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()),
+      time: pad(d.getHours()) + ':' + pad(d.getMinutes())
+    };
+  }
+
+  function initMyHubUsagePage() {
+    visitsState = { search: '', sortBy: 'Date', sortDir: 'desc', page: 1, pageSize: 10 };
+
+    visitsState = { search: '', sortBy: 'Date', sortDir: 'desc', page: 1, pageSize: 10 };
+    sessionsState = { sortBy: 'LoginTime', sortDir: 'desc', page: 1, pageSize: 10 };
+
+    recordVisitModal = new bootstrap.Modal(document.getElementById('recordVisitModal'));
+    manualSessionModal = new bootstrap.Modal(document.getElementById('manualSessionModal'));
+
+    document.querySelectorAll('.pill-tab').forEach(function (tab) {
+      tab.addEventListener('click', function () { switchTab(tab.dataset.tab); });
+    });
+
+    document.getElementById('btn-record-visit').addEventListener('click', openRecordVisitModal);
+    document.getElementById('visit-form').addEventListener('submit', handleSaveVisit);
+    document.getElementById('btn-visit-find-beneficiary').addEventListener('click', function () {
+      runBeneficiarySearch('visit', function (id) { selectedBeneficiaryId = id; });
+    });
+    document.getElementById('visit-computerused').addEventListener('change', function (e) {
+      document.getElementById('visit-numcomputers-wrap').classList.toggle('d-none', !e.target.checked);
+    });
+
+    document.getElementById('btn-manual-session').addEventListener('click', openManualSessionModal);
+    document.getElementById('manual-session-form').addEventListener('submit', handleManualSession);
+    document.getElementById('btn-manual-find').addEventListener('click', function () {
+      runBeneficiarySearch('manual', function (id) { manualSelectedBeneficiaryId = id; });
+    });
+
+    document.getElementById('visits-search').addEventListener('input', debounce(function (e) {
+      visitsState.search = e.target.value; visitsState.page = 1; fetchVisits();
+    }, 350));
+
+    loadStaticOptions().then(fetchVisits);
+    fetchDashboardStats();
+  }
+
+  function fetchDashboardStats() {
+    runServer('getHubUsageDashboard', token()).then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      var today = res.data.today, month = res.data.thisMonth;
+      document.getElementById('stat-today-visits').textContent = today.totalHubVisits;
+      document.getElementById('stat-today-unique').textContent = today.uniqueHubUsers;
+      document.getElementById('stat-today-returning').textContent = today.returningUsers;
+      document.getElementById('stat-month-computerhours').textContent = month.totalComputerHours;
+      document.getElementById('stat-month-utilization').textContent = month.computerUtilizationPct !== null ? month.computerUtilizationPct + '%' : 'N/A';
+    });
+  }
+
+  function loadStaticOptions() {
+    return Promise.all([
+      runServer('getActivityOptions', token()),
+      runServer('getVisitorTypeOptions', token())
+    ]).then(function (results) {
+      if (results[0].success) activityOptions = results[0].data;
+      if (results[1].success) visitorTypeOptions = results[1].data;
+
+      document.getElementById('visit-visitortype').innerHTML = '<option value="">Select…</option>' +
+        visitorTypeOptions.map(function (v) { return '<option value="' + escapeHtml(v.name) + '">' + escapeHtml(v.name) + '</option>'; }).join('');
+
+      var activityCheckboxes = activityOptions.map(function (a) {
+        return '<div class="form-check form-check-inline"><input class="form-check-input activity-cb" type="checkbox" value="' + a.id + '" id="act-v-' + a.id + '"><label class="form-check-label" for="act-v-' + a.id + '">' + escapeHtml(a.name) + '</label></div>';
+      }).join('');
+      document.getElementById('visit-activities').innerHTML = activityCheckboxes;
+    });
+  }
+
+  function switchTab(tabKey) {
+    document.querySelectorAll('.pill-tab').forEach(function (t) { t.classList.toggle('active', t.dataset.tab === tabKey); });
+    document.querySelectorAll('.usage-pane').forEach(function (p) { p.classList.add('d-none'); });
+    document.getElementById('pane-' + tabKey).classList.remove('d-none');
+    // The stat cards only ever loaded once, at page load — switching tabs
+    // (e.g. after joining/closing a group session, or recording a visit)
+    // never refreshed them, so "Visitors Today" etc. could sit stale for
+    // the whole time someone had this page open. Cheap enough to just
+    // re-fetch on every tab click.
+    fetchDashboardStats();
+    if (tabKey === 'visits') fetchVisits();
+    if (tabKey === 'computerusage') fetchComputersAndSessions();
+    if (tabKey === 'dataquality') fetchDataQuality();
+    if (tabKey === 'feedback') fetchFeedback();
+  }
+
+  // ---------- Feedback ----------
+  var feedbackState = { page: 1, pageSize: 10 };
+
+  function fetchFeedback() {
+    var el = document.getElementById('feedback-list');
+    el.innerHTML = '<p class="text-muted text-center py-4">Loading…</p>';
+    runServer('getMyHubFeedback', token(), feedbackState).then(function (res) {
+      if (!res.success) { el.innerHTML = '<p class="text-danger text-center py-4">' + res.message + '</p>'; return; }
+      var records = res.data.records;
+      if (!records.length) { el.innerHTML = '<p class="text-muted text-center py-4">No feedback yet.</p>'; return; }
+      el.innerHTML = records.map(function (f) {
+        var stars = f.Rating ? '<span class="text-warning">' + '★'.repeat(Number(f.Rating)) + '</span> ' : '';
+        return '<div class="card-surface p-3 mb-2">' +
+          '<div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-1">' +
+            '<strong>' + escapeHtml(f.BeneficiaryName || '(anonymous)') + '</strong>' +
+            stars +
+          '</div>' +
+          '<div class="small text-muted mb-1">' + escapeHtml(formatDateDisplay(f.DateCreated)) + '</div>' +
+          '<div style="white-space:pre-wrap">' + escapeHtml(f.Message) + '</div>' +
+        '</div>';
+      }).join('');
+      var p = res.data.pagination;
+      var start = (p.page - 1) * p.pageSize + 1;
+      var end = Math.min(p.page * p.pageSize, p.totalRecords);
+      document.getElementById('feedback-summary').textContent = p.totalRecords === 0 ? 'No records' : ('Showing ' + start + '–' + end + ' of ' + p.totalRecords);
+      renderPagination('feedback-pagination', p, function (pg) { feedbackState.page = pg; fetchFeedback(); });
+    });
+  }
+
+  // ---------- Data Quality ----------
+  function fetchDataQuality() {
+    var el = document.getElementById('dataquality-list');
+    el.innerHTML = '<p class="text-muted text-center py-4">Loading…</p>';
+    runServer('getMyHubDataQualityQueue', token()).then(function (res) {
+      if (!res.success) { el.innerHTML = '<p class="text-danger text-center py-4">' + res.message + '</p>'; return; }
+      if (!res.data.length) { el.innerHTML = '<p class="text-muted text-center py-4">No open issues — nice and tidy.</p>'; return; }
+      el.innerHTML = res.data.map(function (issue) {
+        var badge = issue.Severity === 'Block' ? 'bg-danger' : (issue.Severity === 'Warn' ? 'bg-warning text-dark' : 'bg-secondary');
+        return '<div class="card-surface p-3 mb-2 d-flex justify-content-between align-items-start flex-wrap gap-2">' +
+          '<div><span class="badge ' + badge + ' me-2">' + issue.Severity + '</span><strong>' + escapeHtml(issue.IssueType) + '</strong>' +
+          '<div class="small text-muted mt-1">' + escapeHtml(issue.Detail) + '</div></div>' +
+          '<div class="d-flex gap-1">' +
+            '<button class="btn btn-sm btn-light" onclick="MyHubUsage.resolveIssue(\'' + issue.IssueID + '\', \'Resolved\')">Resolve</button>' +
+            '<button class="btn btn-sm btn-light" onclick="MyHubUsage.resolveIssue(\'' + issue.IssueID + '\', \'Ignored\')">Ignore</button>' +
+          '</div>' +
+        '</div>';
+      }).join('');
+    });
+  }
+
+  // ---------- Visits ----------
+  function fetchVisits() {
+    var tbody = document.getElementById('visits-table-body');
+    tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">Loading…</td></tr>';
+    runServer('getMyHubVisits', token(), visitsState).then(function (res) {
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="8" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      renderVisitsTable(res.data.records);
+      renderSummary('visits-summary', res.data.pagination);
+      renderPagination('visits-pagination', res.data.pagination, function (p) { visitsState.page = p; fetchVisits(); });
+    });
+  }
+
+  function renderVisitsTable(records) {
+    var tbody = document.getElementById('visits-table-body');
+    if (!records.length) { tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">No visits recorded yet.</td></tr>'; return; }
+    tbody.innerHTML = records.map(function (v) {
+      return '<tr>' +
+        '<td>' + escapeHtml(v.Date) + '</td>' +
+        '<td class="fw-medium">' + escapeHtml(v.BeneficiaryFirstName || '') + '</td>' +
+        '<td>' + escapeHtml(v.ArrivalTime) + '</td>' +
+        '<td>' + (v.DepartureTime ? escapeHtml(v.DepartureTime) : '&mdash;') + '</td>' +
+        '<td>' + (v.DurationMinutes !== '' ? v.DurationMinutes + ' min' : '&mdash;') + '</td>' +
+        '<td class="small text-muted">' + escapeHtml(v.ActivityNames || '') + '</td>' +
+        '<td>' + (v.ComputerUsed === true || v.ComputerUsed === 'true' ? '<i class="bi bi-check-lg text-success"></i>' : '') + '</td>' +
+      '</tr>';
+    }).join('');
+  }
+
+  function renderSummary(elId, p) {
+    var el = document.getElementById(elId);
+    var start = (p.page - 1) * p.pageSize + 1;
+    var end = Math.min(p.page * p.pageSize, p.totalRecords);
+    el.textContent = p.totalRecords === 0 ? 'No records' : ('Showing ' + start + '–' + end + ' of ' + p.totalRecords);
+  }
+
+  // ---------- Record Visit ----------
+  function openRecordVisitModal() {
+    document.getElementById('visit-form').reset();
+    document.getElementById('visit-numcomputers-wrap').classList.add('d-none');
+    document.getElementById('visit-beneficiary-results').innerHTML = '';
+    document.getElementById('visit-beneficiary-selected').textContent = '';
+    document.getElementById('visit-beneficiary-id').value = '';
+    selectedBeneficiaryId = null;
+    document.querySelectorAll('.activity-cb').forEach(function (cb) { cb.checked = false; });
+    var now = localDateTimeParts_();
+    document.getElementById('visit-date').value = now.date;
+    document.getElementById('visit-arrival').value = now.time;
+    recordVisitModal.show();
+  }
+
+  function runBeneficiarySearch(prefix, onPick) {
+    var name = document.getElementById(prefix + '-beneficiary-search').value.trim();
+    if (!name) return;
+    var resultsEl = document.getElementById(prefix + '-beneficiary-results');
+    resultsEl.innerHTML = '<p class="text-muted small">Searching…</p>';
+    runServer('lookupBeneficiary', token(), { FirstName: name }).then(function (res) {
+      if (!res.success) { resultsEl.innerHTML = '<p class="text-danger small">' + res.message + '</p>'; return; }
+      if (!res.data.length) { resultsEl.innerHTML = '<p class="text-muted small">No matches. Register them first from Beneficiaries.</p>'; return; }
+      resultsEl.innerHTML = res.data.map(function (b) {
+        var label = escapeHtml(b.FirstName + ' ' + b.SurnameInitial + '.');
+        return '<div class="card-surface p-2 mb-1" style="cursor:pointer" onclick="MyHubUsage.pickBeneficiary(\'' + prefix + '\', \'' + b.BeneficiaryID + '\', \'' + label.replace(/'/g, "\\'") + '\')">' +
+          label + ' — ' + escapeHtml(b.AgeGroup) + ', ' + escapeHtml(b.Gender) +
+        '</div>';
+      }).join('');
+    });
+  }
+
+  // ---------- Computer Usage ----------
+  function fetchComputersAndSessions() {
+    Promise.all([
+      runServer('getMyHubComputers', token()),
+      runServer('getMyHubComputerSessions', token(), { page: 1, pageSize: 1000 })
+    ]).then(function (results) {
+      var computersRes = results[0], sessionsRes = results[1];
+      if (!computersRes.success) { showToast(computersRes.message, 'danger'); return; }
+      computersCache = computersRes.data;
+
+      openSessionsByComputer = {};
+      if (sessionsRes.success) {
+        sessionsRes.data.records.filter(function (s) { return s.Status === 'Open'; }).forEach(function (s) {
+          openSessionsByComputer[s.ComputerID] = s;
+        });
+      }
+      renderComputers();
+      fetchSessions();
+    });
+  }
+
+  function renderComputers() {
+    var tbody = document.getElementById('computers-table-body');
+    if (!computersCache.length) { tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-4">No computers registered yet — add Desktop Computers / Laptops in Inventory at the Hub first.</td></tr>'; return; }
+
+    tbody.innerHTML = computersCache.map(function (c) {
+      var openSession = openSessionsByComputer[c.ComputerID];
+      var badge = c.Status === 'In Use' ? 'badge-status-inuse' : (c.Status === 'Faulty' ? 'badge-status-faulty' : 'badge-status-instorage');
+      var action = openSession
+        ? '<button class="btn btn-sm btn-danger" onclick="MyHubUsage.endSession(\'' + openSession.SessionID + '\')">End Session</button>'
+        : '<span class="text-muted small">&mdash;</span>';
+      return '<tr>' +
+        '<td class="text-muted">' + c.ComputerID + '</td>' +
+        '<td class="fw-medium">' + escapeHtml(c.ItemName) + (c.Manufacturer ? ' <span class="text-muted small">(' + escapeHtml(c.Manufacturer) + ' ' + escapeHtml(c.Model || '') + ')</span>' : '') + '</td>' +
+        '<td><span class="badge ' + badge + '">' + escapeHtml(c.Status) + '</span>' + (openSession ? ' <span class="badge bg-warning text-dark">Session open</span>' : '') + '</td>' +
+        '<td class="text-end">' + action + '</td>' +
+      '</tr>';
+    }).join('');
+  }
+
+  function fetchSessions() {
+    var tbody = document.getElementById('sessions-table-body');
+    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">Loading…</td></tr>';
+    runServer('getMyHubComputerSessions', token(), sessionsState).then(function (res) {
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="6" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      renderSessions(res.data.records);
+      var p = res.data.pagination;
+      var el = document.getElementById('sessions-summary');
+      var start = (p.page - 1) * p.pageSize + 1;
+      var end = Math.min(p.page * p.pageSize, p.totalRecords);
+      el.textContent = p.totalRecords === 0 ? 'No records' : ('Showing ' + start + '–' + end + ' of ' + p.totalRecords);
+      renderPagination('sessions-pagination', p, function (pg) { sessionsState.page = pg; fetchSessions(); });
+    });
+  }
+
+  function renderSessions(records) {
+    var tbody = document.getElementById('sessions-table-body');
+    if (!records.length) { tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">No sessions recorded yet.</td></tr>'; return; }
+    tbody.innerHTML = records.map(function (s) {
+      return '<tr>' +
+        '<td>' + s.ComputerID + '</td>' +
+        '<td class="fw-medium">' + escapeHtml(s.BeneficiaryFirstName || '') + '</td>' +
+        '<td>' + formatDateTimeShort_(s.LoginTime) + '</td>' +
+        '<td>' + (s.LogoutTime ? formatDateTimeShort_(s.LogoutTime) : '&mdash;') + '</td>' +
+        '<td>' + (s.DurationMinutes !== '' ? s.DurationMinutes + ' min' : '&mdash;') + '</td>' +
+        '<td><span class="badge ' + (s.Status === 'Open' ? 'bg-warning text-dark' : 'badge-active') + '">' + s.Status + '</span></td>' +
+      '</tr>';
+    }).join('');
+  }
+
+  function formatDateTimeShort_(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return escapeHtml(iso);
+    return d.toLocaleString();
+  }
+
+  function openManualSessionModal() {
+    document.getElementById('manual-session-form').reset();
+    document.getElementById('manual-beneficiary-results').innerHTML = '';
+    document.getElementById('manual-beneficiary-selected').textContent = '';
+    manualSelectedBeneficiaryId = null;
+    document.getElementById('manual-date').value = localDateTimeParts_().date;
+    document.getElementById('manual-computer').innerHTML = computersCache.map(function (c) {
+      return '<option value="' + c.ComputerID + '">' + c.ComputerID + ' — ' + escapeHtml(c.ItemName) + '</option>';
+    }).join('');
+    manualSessionModal.show();
+  }
+
+  function handleManualSession(e) {
+    e.preventDefault();
+    if (!manualSelectedBeneficiaryId) { showToast('Search for and select a beneficiary first.', 'danger'); return; }
+    var btn = document.getElementById('manual-session-save-btn');
+    btn.disabled = true;
+    runServer('recordManualSession', token(), {
+      ComputerID: document.getElementById('manual-computer').value,
+      BeneficiaryID: manualSelectedBeneficiaryId,
+      Date: document.getElementById('manual-date').value,
+      LoginTime: document.getElementById('manual-login').value,
+      LogoutTime: document.getElementById('manual-logout').value
+    }).then(function (res) {
+      btn.disabled = false;
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      manualSessionModal.hide();
+      showToast('Session logged.', 'success');
+      fetchComputersAndSessions();
+    }).catch(function (err) { btn.disabled = false; showToast(err.message, 'danger'); });
+  }
+
+  function handleSaveVisit(e) {
+    e.preventDefault();
+    var form = document.getElementById('visit-form');
+    if (!form.checkValidity() || !selectedBeneficiaryId) {
+      form.classList.add('was-validated');
+      if (!selectedBeneficiaryId) showToast('Search for and select a beneficiary first.', 'danger');
+      return;
+    }
+
+    var activityIds = Array.prototype.slice.call(document.querySelectorAll('.activity-cb:checked')).map(function (cb) { return cb.value; });
+    var data = {
+      BeneficiaryID: selectedBeneficiaryId,
+      Date: document.getElementById('visit-date').value,
+      ArrivalTime: document.getElementById('visit-arrival').value,
+      DepartureTime: document.getElementById('visit-departure').value,
+      VisitorType: document.getElementById('visit-visitortype').value,
+      ActivityIDs: activityIds,
+      ComputerUsed: document.getElementById('visit-computerused').checked,
+      NumComputersUsed: document.getElementById('visit-numcomputers').value,
+      Notes: document.getElementById('visit-notes').value.trim()
+    };
+
+    var btn = document.getElementById('visit-save-btn');
+    btn.disabled = true;
+    runServer('recordVisit', token(), data).then(function (res) {
+      btn.disabled = false;
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      recordVisitModal.hide();
+      showToast('Visit recorded.', 'success');
+      fetchVisits();
+    }).catch(function (err) { btn.disabled = false; showToast(err.message, 'danger'); });
+  }
+
+  window.MyHubUsage = {
+    resolveIssue: function (issueId, status) {
+      runServer('resolveDataQualityIssue', token(), issueId, status).then(function (res) {
+        if (!res.success) { showToast(res.message, 'danger'); return; }
+        showToast('Issue ' + status.toLowerCase() + '.', 'success');
+        fetchDataQuality();
+      });
+    },
+    pickBeneficiary: function (prefix, id, label) {
+      if (prefix === 'visit') selectedBeneficiaryId = id;
+      if (prefix === 'manual') manualSelectedBeneficiaryId = id;
+      document.getElementById(prefix + '-beneficiary-id').value = id;
+      document.getElementById(prefix + '-beneficiary-selected').innerHTML = 'Selected: <strong>' + label + '</strong> (' + id + ')';
+      document.getElementById(prefix + '-beneficiary-results').innerHTML = '';
+    },
+    endSession: function (sessionId) {
+      runServer('endSession', token(), sessionId).then(function (res) {
+        if (!res.success) { showToast(res.message, 'danger'); return; }
+        showToast('Session ended.', 'success');
+        fetchComputersAndSessions();
+      });
+    }
+  };
+})();
+</script>

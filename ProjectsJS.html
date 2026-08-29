@@ -1,0 +1,196 @@
+<script>
+(function () {
+  var state = { search: '', sortBy: 'ProjectDate', sortDir: 'desc', page: 1, pageSize: 10, hubId: '', countryId: '', quotaId: '' };
+  var currentRecords = [];
+  var deleteModal, pendingDeleteId;
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'projects') return;
+    initProjectsPage();
+  });
+
+  function initProjectsPage() {
+    state = { search: '', sortBy: 'ProjectDate', sortDir: 'desc', page: 1, pageSize: 10, hubId: '', quotaId: '' };
+    deleteModal = new bootstrap.Modal(document.getElementById('projectDeleteModal'));
+    document.getElementById('confirm-delete-project').addEventListener('click', handleConfirmDelete);
+
+    document.getElementById('project-search').addEventListener('input', debounce(function (e) {
+      state.search = e.target.value;
+      state.page = 1;
+      fetchProjects();
+    }, 350));
+
+    document.getElementById('project-hub-filter').addEventListener('change', function (e) {
+      state.hubId = e.target.value;
+      state.page = 1;
+      fetchProjects();
+    });
+
+    document.getElementById('project-country-filter').addEventListener('change', function (e) {
+      state.countryId = e.target.value;
+      state.page = 1;
+      fetchProjects();
+    });
+
+    document.getElementById('project-quota-filter').addEventListener('change', function (e) {
+      state.quotaId = e.target.value;
+      state.page = 1;
+      fetchProjects();
+    });
+
+    document.getElementById('project-sort').addEventListener('change', function (e) {
+      var parts = e.target.value.split(':');
+      state.sortBy = parts[0];
+      state.sortDir = parts[1];
+      state.page = 1;
+      fetchProjects();
+    });
+
+    document.getElementById('project-page-size').addEventListener('change', function (e) {
+      state.pageSize = parseInt(e.target.value, 10);
+      state.page = 1;
+      fetchProjects();
+    });
+
+    loadFilterOptions().then(fetchProjects);
+  }
+
+  function loadFilterOptions() {
+    return Promise.all([
+      runServer('getHubs', token(), { page: 1, pageSize: 100000 }),
+      runServer('getQuotas', token(), { page: 1, pageSize: 100000 }),
+      runServer('getCountryOptions', token())
+    ]).then(function (results) {
+      var hubsRes = results[0], quotasRes = results[1], countriesRes = results[2];
+
+      var hubSelect = document.getElementById('project-hub-filter');
+      if (hubsRes.success) {
+        hubSelect.innerHTML = '<option value="">All Hubs</option>' +
+          hubsRes.data.records.map(function (h) { return '<option value="' + h.HubID + '">' + escapeHtml(h.HubName) + '</option>'; }).join('');
+      }
+
+      var countrySelect = document.getElementById('project-country-filter');
+      if (countriesRes.success) {
+        countrySelect.innerHTML = '<option value="">All Countries</option>' +
+          countriesRes.data.map(function (c) { return '<option value="' + c.id + '">' + escapeHtml(c.name) + '</option>'; }).join('');
+      }
+
+      var quotaSelect = document.getElementById('project-quota-filter');
+      if (quotasRes.success) {
+        quotaSelect.innerHTML = '<option value="">All Reporting Quotas</option>' +
+          quotasRes.data.records.map(function (q) {
+            return '<option value="' + q.QuotaID + '">' + escapeHtml(q.Quarter + ' ' + q.YearLabel) + '</option>';
+          }).join('');
+      }
+    });
+  }
+
+  function fetchProjects() {
+    var grid = document.getElementById('projects-grid');
+    grid.innerHTML = '<div class="text-center text-muted py-4" style="grid-column: 1 / -1;">Loading…</div>';
+
+    var token = localStorage.getItem(MNE_SESSION_KEY);
+
+    runServer('getAllProjects', token, state).then(function (res) {
+      if (!res.success) {
+        grid.innerHTML = '<div class="alert alert-danger" style="grid-column: 1 / -1;">' + res.message + '</div>';
+        return;
+      }
+      currentRecords = res.data.records;
+      renderCards(currentRecords);
+      renderSummary(res.data.pagination);
+      renderPagination('projects-pagination', res.data.pagination, function (p) {
+        state.page = p;
+        fetchProjects();
+      });
+    }).catch(function (err) {
+      grid.innerHTML = '<div class="alert alert-danger" style="grid-column: 1 / -1;">' + err.message + '</div>';
+    });
+  }
+
+  function renderCards(records) {
+    var grid = document.getElementById('projects-grid');
+    if (!records.length) {
+      grid.innerHTML = '<div class="text-center text-muted py-4" style="grid-column: 1 / -1;">No reports have been submitted yet.</div>';
+      return;
+    }
+
+    grid.innerHTML = records.map(function (p) {
+      var badge = p.Status === 'Active' ? 'badge-active' : 'badge-inactive';
+      var badgeLabel = p.Status === 'Submitted' ? 'Filed' : p.Status;
+      var quotaLine = p.ProjectDate
+        ? '<div class="project-card-quota">' + escapeHtml(p.QuotaLabel || '—') + '</div>' +
+          '<div class="project-card-date"><i class="bi bi-calendar3"></i> ' + escapeHtml(formatDateRangeDisplay(p.ProjectDate, p.ProjectEndDate)) + '</div>'
+        : '<div class="project-card-quota text-muted">Not yet activated</div>';
+
+      return (
+        '<div class="project-card view-project-btn" data-project-id="' + p.ProjectID + '">' +
+          '<div class="d-flex justify-content-between align-items-start">' +
+            '<div class="project-card-name">' + escapeHtml(p.ProjectName || 'Untitled Project') + '</div>' +
+            '<span class="badge ' + badge + '">' + escapeHtml(badgeLabel) + '</span>' +
+          '</div>' +
+          '<div class="project-card-hub">' + escapeHtml(p.HubName || '—') + '</div>' +
+          quotaLine +
+          '<div class="project-card-stats">' +
+            '<div class="stat-block"><span class="stat-block-label">Beneficiaries</span><span class="stat-block-value">' + p.TotalNewBeneficiaries + '</span></div>' +
+            '<div class="stat-block"><span class="stat-block-label">Cost</span><span class="stat-block-value">' + formatCurrency(p.Cost) + '</span></div>' +
+          '</div>' +
+          '<button type="button" class="btn btn-sm btn-light text-danger project-delete-btn mt-2" data-project-id="' + p.ProjectID + '" title="Delete"><i class="bi bi-trash"></i></button>' +
+        '</div>'
+      );
+    }).join('');
+  }
+
+  document.addEventListener('click', function (e) {
+    var deleteBtn = e.target.closest('.project-delete-btn');
+    if (deleteBtn) {
+      e.stopPropagation();
+      openDeleteConfirm(deleteBtn.dataset.projectId);
+      return;
+    }
+
+    var card = e.target.closest('.view-project-btn');
+    if (!card) return;
+    var project = currentRecords.find(function (p) { return p.ProjectID === card.dataset.projectId; });
+    if (!project) return;
+    var subtitle = project.ProjectDate
+      ? (project.HubName || 'Hub') + ' — ' + (project.QuotaLabel || '') + ' — ' + formatDateRangeDisplay(project.ProjectDate, project.ProjectEndDate)
+      : (project.HubName || 'Hub') + ' — Not yet activated';
+    showProjectDetail(project, subtitle);
+  });
+
+  function openDeleteConfirm(projectId) {
+    var project = currentRecords.find(function (p) { return p.ProjectID === projectId; });
+    if (!project) return;
+    pendingDeleteId = projectId;
+    document.getElementById('delete-project-name').textContent = project.ProjectName || 'this project';
+    deleteModal.show();
+  }
+
+  function handleConfirmDelete() {
+    if (!pendingDeleteId) return;
+    var btn = document.getElementById('confirm-delete-project');
+    btn.disabled = true;
+    runServer('deleteProject', token(), pendingDeleteId).then(function (res) {
+      btn.disabled = false;
+      deleteModal.hide();
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Project deleted.', 'success');
+      fetchProjects();
+    }).catch(function (err) {
+      btn.disabled = false;
+      deleteModal.hide();
+      showToast(err.message, 'danger');
+    });
+  }
+
+  function renderSummary(p) {
+    var el = document.getElementById('projects-summary');
+    var start = (p.page - 1) * p.pageSize + 1;
+    var end = Math.min(p.page * p.pageSize, p.totalRecords);
+    el.textContent = p.totalRecords === 0 ? 'No records' : ('Showing ' + start + '–' + end + ' of ' + p.totalRecords);
+  }
+})();
+</script>

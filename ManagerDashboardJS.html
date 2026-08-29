@@ -1,0 +1,47 @@
+<script>
+(function () {
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'dashboard') return;
+    // 'dashboard' is shared with the Admin view (DashboardHT.html) — only
+    // act when this fragment (ManagerDashboard.html) is the one that got
+    // loaded, which Router.gs decides based on role.
+    if (!document.getElementById('stat-my-total-beneficiaries')) return;
+    if (!window.MNE_CURRENT_USER || window.MNE_CURRENT_USER.role !== 'HubManager') return;
+    initManagerDashboard();
+  });
+
+  function initManagerDashboard() {
+    var hubLabel = document.getElementById('manager-hub-label');
+    var hubId = window.MNE_CURRENT_USER.hubId;
+    var token = localStorage.getItem(MNE_SESSION_KEY);
+
+    runServer('getHubById', token, hubId).then(function (res) {
+      hubLabel.textContent = res.success ? ('Hub: ' + res.data.name) : 'Your hub';
+    }).catch(function () {
+      hubLabel.textContent = 'Your hub';
+    });
+
+    runServer('getMyDashboardStats', token).then(function (res) {
+      if (!res.success) {
+        showToast(res.message, 'danger');
+        return;
+      }
+
+      animateCount('stat-my-total-beneficiaries', res.data.totalBeneficiaries);
+      animateCount('stat-my-total-projects', res.data.totalProjects);
+      document.getElementById('stat-my-total-cost').textContent = formatCurrency(res.data.totalCost);
+
+      // Beneficiaries is now an all-time headcount from the Beneficiaries
+      // table (not a quota-year figure), so it doesn't get the year tag —
+      // only Projects/Cost are still scoped to the reporting year.
+      var yearTag = '(' + res.data.currentYearLabel + ')';
+      ['stat-my-projects-year', 'stat-my-cost-year'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.textContent = yearTag;
+      });
+    }).catch(function (err) {
+      showToast(err.message, 'danger');
+    });
+  }
+})();
+</script>

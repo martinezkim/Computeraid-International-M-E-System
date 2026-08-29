@@ -1,0 +1,106 @@
+<script>
+(function () {
+  var CATEGORY_ICONS = {
+    'Desktop Computers': 'bi-pc-display',
+    'Laptops': 'bi-laptop',
+    'Printers': 'bi-printer',
+    'Projectors': 'bi-projector',
+    'Routers / Networking Equipment': 'bi-router',
+    'Solar Equipment': 'bi-brightness-high-fill',
+    'VR Headsets': 'bi-eyeglasses',
+    'Tablets': 'bi-tablet',
+    'UPS / Power Backup': 'bi-battery-charging',
+    'Other Devices': 'bi-box-seam'
+  };
+
+  var ICON_COLORS = ['#8b5cf6', '#14b8a6', '#f97316', '#0ea5e9', '#ef4444', '#22c55e', '#eab308', '#6366f1', '#ec4899', '#0d9488'];
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'inventorysummary') return;
+    if (!window.MNE_CURRENT_USER || window.MNE_CURRENT_USER.role !== 'HubManager') return;
+    initInventorySummaryPage();
+  });
+
+  function initInventorySummaryPage() {
+    var hubLabel = document.getElementById('inv-overview-hub-label');
+    var hubId = window.MNE_CURRENT_USER.hubId;
+    var token = localStorage.getItem(MNE_SESSION_KEY);
+    runServer('getHubById', token, hubId).then(function (res) {
+      hubLabel.textContent = res.success ? ('Hub: ' + res.data.name) : 'Your hub';
+    }).catch(function () {
+      hubLabel.textContent = 'Your hub';
+    });
+    runServer('getInventorySummaryDashboard', token).then(function (res) {
+      if (!res.success) {
+        showToast(res.message, 'danger');
+        return;
+      }
+      renderHubInventory(res.data.hubInventory);
+      renderLaptopSales(res.data.laptopSales);
+    }).catch(function (err) {
+      showToast(err.message, 'danger');
+    });
+  }
+
+  function miniCard(icon, color, value, label) {
+    return (
+      '<div class="mini-stat-card">' +
+        '<span class="mini-stat-icon" style="background:' + color + ';"><i class="bi ' + icon + '"></i></span>' +
+        '<div class="mini-stat-value">' + value + '</div>' +
+        '<div class="mini-stat-label">' + label + '</div>' +
+      '</div>'
+    );
+  }
+
+  function renderHubInventory(data) {
+    var grid = document.getElementById('hub-inventory-summary-grid');
+    var cards = [];
+    var colorIdx = 0;
+
+    cards.push(miniCard('bi-boxes', '#4b5060', data.totalAssets, 'Total Assets'));
+
+    Object.keys(data.byCategory).forEach(function (category) {
+      var icon = CATEGORY_ICONS[category] || 'bi-box-seam';
+      var color = ICON_COLORS[colorIdx % ICON_COLORS.length];
+      colorIdx++;
+      cards.push(miniCard(icon, color, data.byCategory[category], 'Total ' + category));
+    });
+
+    var statusMeta = [
+      ['In Use', 'bi-check-circle-fill', '#1a56c4'],
+      ['In Storage', 'bi-archive-fill', '#4b5060'],
+      ['Under Repair', 'bi-tools', '#b8790a'],
+      ['Faulty', 'bi-exclamation-triangle-fill', '#d93025']
+    ];
+    statusMeta.forEach(function (m) {
+      cards.push(miniCard(m[1], m[2], data.byStatus[m[0]] || 0, 'Assets ' + (m[0] === 'Faulty' ? '(Faulty)' : m[0])));
+    });
+
+    grid.innerHTML = cards.join('');
+  }
+
+  function renderLaptopSales(data) {
+    var grid = document.getElementById('laptop-sales-summary-grid');
+
+    var tiles = [
+      { icon: 'bi-laptop', bg: 'linear-gradient(135deg,#8b5cf6,#a855f7)', value: data.totalLaptops, label: 'Total Laptops for Sale' },
+      { icon: 'bi-box-seam', bg: 'linear-gradient(135deg,#14b8a6,#0ea5e9)', value: data.currentStock, label: 'Current Stock' },
+      { icon: 'bi-check-circle-fill', bg: 'linear-gradient(135deg,#22c55e,#16a34a)', value: data.sold, label: 'Sold Laptops' },
+      { icon: 'bi-exclamation-triangle-fill', bg: 'linear-gradient(135deg,#ef4444,#dc2626)', value: data.faulty, label: 'Faulty Laptops' },
+      { icon: 'bi-cash-stack', bg: 'linear-gradient(135deg,#feca38,#ff9f1c)', value: formatCurrency(data.totalStockValue), label: 'Total Stock Value' },
+      { icon: 'bi-cash-coin', bg: 'linear-gradient(135deg,#0ea5e9,#2563eb)', value: formatCurrency(data.totalSalesValue), label: 'Total Sales Value' },
+      { icon: 'bi-bag-check-fill', bg: 'linear-gradient(135deg,#22c55e,#0d9488)', value: data.sold, label: 'Number of Laptops Sold' }
+    ];
+
+    grid.innerHTML = tiles.map(function (t, i) {
+      return (
+        '<div class="stat-tile animate-float-up" style="animation-delay:' + (i * 0.05) + 's; background:' + t.bg + ';">' +
+          '<span class="stat-icon"><i class="bi ' + t.icon + '"></i></span>' +
+          '<div><div class="stat-value">' + t.value + '</div><div class="stat-label">' + t.label + '</div></div>' +
+          '<div class="stat-glow"></div>' +
+        '</div>'
+      );
+    }).join('');
+  }
+})();
+</script>

@@ -1,0 +1,60 @@
+<script>
+  /**
+   * ============================================================
+   * PROJECT DETAIL MODAL (shared)
+   * ============================================================
+   * Both the admin's "Submitted Reports" table and the Hub Manager's
+   * own "My Projects" list call showProjectDetail(project, subtitle)
+   * with a full project record (already fetched — no extra round trip)
+   * plus a context subtitle (e.g. "Kajiado Hub — Q1 2026 — Feb 15,
+   * 2026"). The modal title is always the project's own name. Lives at
+   * the shell level in Index.html, not inside a page fragment, so it's
+   * always present regardless of which page is currently loaded.
+   * ============================================================
+   */
+
+  var projectDetailModalInstance;
+
+  var AGE_BAND_DETAIL_ORDER = [
+    'Age0to5', 'Age6to10', 'Age11to13', 'Age14to18', 'Age19to23',
+    'Age24to28', 'Age29to32', 'Age33to36', 'Age37to64', 'Age65Plus'
+  ];
+  var AGE_BAND_DETAIL_LABELS = {
+    Age0to5: '0–5', Age6to10: '6–10', Age11to13: '11–13', Age14to18: '14–18', Age19to23: '19–23',
+    Age24to28: '24–28', Age29to32: '29–32', Age33to36: '33–36', Age37to64: '37–64', Age65Plus: '65+'
+  };
+
+  function showProjectDetail(project, subtitle) {
+    if (!projectDetailModalInstance) {
+      var el = document.getElementById('projectDetailModal');
+      if (!el) return;
+      projectDetailModalInstance = new bootstrap.Modal(el);
+    }
+
+    document.getElementById('project-detail-title').textContent = project.ProjectName || 'Project Report';
+    document.getElementById('project-detail-subtitle').textContent = subtitle || '';
+
+    var total = Number(project.TotalNewBeneficiaries) || 0;
+    var female = Number(project.Female) || 0;
+    var male = Math.max(0, total - female);
+
+    document.getElementById('detail-total').textContent = total;
+    document.getElementById('detail-female').textContent = female;
+    document.getElementById('detail-male').textContent = male;
+    document.getElementById('detail-cost').textContent = formatCurrency(project.Cost);
+
+    document.getElementById('detail-age-breakdown').innerHTML = AGE_BAND_DETAIL_ORDER.map(function (field) {
+      var count = Number(project[field]) || 0;
+      var pct = total > 0 ? Math.round((count / total) * 100) : 0;
+      return (
+        '<div class="age-bar-row">' +
+          '<div class="age-bar-label">' + AGE_BAND_DETAIL_LABELS[field] + '</div>' +
+          '<div class="age-bar-track"><div class="age-bar-fill" style="width:' + pct + '%;"></div></div>' +
+          '<div class="age-bar-count">' + count + '</div>' +
+        '</div>'
+      );
+    }).join('');
+
+    projectDetailModalInstance.show();
+  }
+</script>

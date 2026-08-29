@@ -1,0 +1,126 @@
+<script>
+(function () {
+  var exportModal;
+  var state = { hubId: '', countryId: '' };
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'admininventory') return;
+    if (!window.MNE_CURRENT_USER || window.MNE_CURRENT_USER.role !== 'Admin') return;
+    initAdminInventoryPage();
+  });
+
+  function initAdminInventoryPage() {
+    state = { hubId: '', countryId: '' };
+    exportModal = new bootstrap.Modal(document.getElementById('inventoryExportModal'));
+
+    document.getElementById('admin-inv-scope-hub-filter').addEventListener('change', function (e) {
+      state.hubId = e.target.value; fetchOverview();
+    });
+    document.getElementById('admin-inv-country-filter').addEventListener('change', function (e) {
+      state.countryId = e.target.value; fetchOverview();
+    });
+
+    document.getElementById('btn-open-export').addEventListener('click', function () {
+      document.getElementById('export-hub-filter').value = state.hubId || '';
+      exportModal.show();
+    });
+    document.getElementById('btn-run-export').addEventListener('click', runExport);
+
+    Promise.all([loadHubOptions(), loadCountryOptions()]).then(fetchOverview);
+  }
+
+  function loadHubOptions() {
+    return runServer('getHubOptions', token()).then(function (res) {
+      if (!res.success) return;
+      var opts = res.data.map(function (h) { return '<option value="' + h.id + '">' + escapeHtml(h.name) + '</option>'; }).join('');
+      document.getElementById('admin-inv-scope-hub-filter').innerHTML = '<option value="">All Hubs</option>' + opts;
+      document.getElementById('export-hub-filter').innerHTML = '<option value="">All Hubs</option>' + opts;
+    });
+  }
+
+  function loadCountryOptions() {
+    return runServer('getCountryOptions', token()).then(function (res) {
+      if (!res.success) return;
+      document.getElementById('admin-inv-country-filter').innerHTML = '<option value="">All Countries</option>' +
+        res.data.map(function (c) { return '<option value="' + c.id + '">' + escapeHtml(c.name) + '</option>'; }).join('');
+    });
+  }
+
+  function fetchOverview() {
+    runServer('getGlobalInventoryOverview', token(), { hubId: state.hubId, countryId: state.countryId }).then(function (res) {
+      if (!res.success) return;
+      document.getElementById('admin-inv-hubcount').textContent = res.data.hubInventory.hubCount;
+      document.getElementById('admin-inv-totalassets').textContent = res.data.hubInventory.totalAssets;
+      document.getElementById('admin-inv-laptopstock').textContent = res.data.laptopSales.currentStock;
+      document.getElementById('admin-inv-laptopsold').textContent = res.data.laptopSales.sold;
+    });
+  }
+
+  // ---------------- Export ----------------
+
+  var EXPORT_COLUMNS = {
+    hubInventory: [
+      { key: 'InventoryID', label: 'Inventory ID' }, { key: 'HubName', label: 'Hub' },
+      { key: 'Category', label: 'Category' }, { key: 'ItemName', label: 'Item' },
+      { key: 'Manufacturer', label: 'Manufacturer' }, { key: 'Model', label: 'Model' },
+      { key: 'SerialNumber', label: 'Serial Number' }, { key: 'Quantity', label: 'Quantity' },
+      { key: 'Condition', label: 'Condition' }, { key: 'DateAcquired', label: 'Date Acquired' },
+      { key: 'Status', label: 'Status' }
+    ],
+    laptops: [
+      { key: 'InventoryID', label: 'Inventory ID' }, { key: 'HubName', label: 'Hub' },
+      { key: 'AssetID', label: 'Asset ID' }, { key: 'Manufacturer', label: 'Manufacturer' },
+      { key: 'Model', label: 'Model' }, { key: 'SerialNumber', label: 'Serial Number' },
+      { key: 'Processor', label: 'Processor' }, { key: 'RAM', label: 'RAM' }, { key: 'Storage', label: 'Storage' },
+      { key: 'Condition', label: 'Condition' }, { key: 'SellingPrice', label: 'Selling Price' },
+      { key: 'DateAdded', label: 'Date Added' }, { key: 'Status', label: 'Status' },
+      { key: 'BuyerName', label: 'Buyer' }, { key: 'SaleDate', label: 'Sale Date' }, { key: 'SalePrice', label: 'Sale Price' },
+      { key: 'OrderNumber', label: 'Order Number' }
+    ],
+    complete: [
+      { key: 'Source', label: 'Source' }, { key: 'HubName', label: 'Hub' }, { key: 'InventoryID', label: 'Inventory ID' },
+      { key: 'Category', label: 'Category' }, { key: 'ItemName', label: 'Item' },
+      { key: 'Manufacturer', label: 'Manufacturer' }, { key: 'Model', label: 'Model' },
+      { key: 'SerialNumber', label: 'Serial Number' }, { key: 'Quantity', label: 'Quantity' },
+      { key: 'Condition', label: 'Condition' }, { key: 'Status', label: 'Status' },
+      { key: 'DateAcquired', label: 'Date Acquired' }, { key: 'DateAdded', label: 'Date Added' },
+      { key: 'SellingPrice', label: 'Selling Price' }
+    ]
+  };
+
+  var EXPORT_LABELS = {
+    hubInventory: 'Hub Inventory', laptopCurrentStock: 'Laptop Current Stock',
+    laptopSold: 'Sold Laptops', laptopFaulty: 'Faulty Laptops', complete: 'Complete Inventory'
+  };
+
+  function runExport() {
+    var reportType = document.getElementById('export-report-type').value;
+    var hubId = document.getElementById('export-hub-filter').value;
+    var format = document.getElementById('export-format').value;
+
+    var btn = document.getElementById('btn-run-export');
+    btn.disabled = true;
+    btn.textContent = 'Exporting…';
+
+    runServer('getInventoryExportData', token(), reportType, hubId).then(function (res) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-download"></i> Export';
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+
+      var cols = reportType === 'hubInventory' ? EXPORT_COLUMNS.hubInventory
+        : reportType === 'complete' ? EXPORT_COLUMNS.complete
+        : EXPORT_COLUMNS.laptops;
+
+      var filename = EXPORT_LABELS[reportType].replace(/\s+/g, '-') + '_' + new Date().toISOString().slice(0, 10);
+      exportRecordsToFile(res.data, cols, format, filename);
+      exportModal.hide();
+    }).catch(function (err) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-download"></i> Export';
+      showToast(err.message, 'danger');
+    });
+  }
+})();
+</script>

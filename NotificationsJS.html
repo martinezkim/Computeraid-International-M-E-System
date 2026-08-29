@@ -1,0 +1,127 @@
+<script>
+(function () {
+  var POLL_MS = 45000;
+  var notificationsCache = [];
+  var pollTimer = null;
+
+  /** Called once from CommonJS.html's applyIdentity() — this is app-shell-level, not a per-page module, so it has no page:loaded gate. */
+  function initNotifications() {
+    var bellBtn = document.getElementById('notification-bell');
+    if (!bellBtn) return; // standalone pages (Login.html etc.) have no Topnav
+
+    document.getElementById('btn-mark-all-read').addEventListener('click', handleMarkAllRead);
+    bellBtn.addEventListener('click', fetchNotifications); // refresh right as the dropdown opens, not just on the poll cadence
+
+    fetchNotifications();
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(fetchNotifications, POLL_MS);
+  }
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  function fetchNotifications() {
+    runServer('getMyNotifications', token(), { limit: 15 }).then(function (res) {
+      if (!res.success) return;
+      notificationsCache = res.data.records;
+      renderBadge(res.data.unreadCount);
+      renderList(notificationsCache);
+    });
+  }
+
+  function renderBadge(count) {
+    var badge = document.getElementById('notification-badge');
+    if (!badge) return;
+    if (count > 0) {
+      badge.textContent = count > 9 ? '9+' : String(count);
+      badge.classList.remove('d-none');
+    } else {
+      badge.classList.add('d-none');
+    }
+  }
+
+  function renderList(records) {
+    var el = document.getElementById('notification-list');
+    if (!el) return;
+    if (!records.length) { el.innerHTML = '<p class="text-muted text-center small py-4">No notifications yet.</p>'; return; }
+
+    el.innerHTML = records.map(function (n) {
+      var iconByType = {
+        LowBalance: 'bi-exclamation-triangle text-danger',
+        BudgetRisk: 'bi-pie-chart text-warning',
+        MissingReceipt: 'bi-receipt-cutoff text-warning',
+        ReconciliationMismatch: 'bi-bank text-danger',
+        FeedbackReceived: 'bi-chat-heart text-info',
+        LowFeedbackRating: 'bi-star-half text-warning',
+        DeviceRequestPending: 'bi-hdd-network text-primary',
+        ManagerEmailChangeRequested: 'bi-person-vcard text-primary'
+      };
+      var icon = iconByType[n.Type] || (n.Severity === 'danger' ? 'bi-exclamation-circle text-danger' : n.Severity === 'warning' ? 'bi-exclamation-circle text-warning' : 'bi-info-circle text-info');
+      return '<div class="px-3 py-2 border-bottom small ' + (n.isRead ? '' : 'bg-light') + '" style="cursor:pointer" onclick="Notifications.openNotification(\'' + n.NotificationID + '\')">' +
+        '<div class="d-flex gap-2">' +
+          '<i class="bi ' + icon + '"></i>' +
+          '<div class="flex-grow-1">' +
+            '<div class="' + (n.isRead ? 'text-muted' : 'fw-medium') + '">' + escapeHtml(n.Message) + '</div>' +
+            '<div class="text-muted" style="font-size:0.72rem">' + relativeTime_(n.CreatedAt) + '</div>' +
+          '</div>' +
+          (n.isRead ? '' : '<span class="badge bg-primary rounded-circle p-1" style="width:8px;height:8px;"></span>') +
+        '</div>' +
+      '</div>';
+    }).join('');
+  }
+
+  function relativeTime_(isoLike) {
+    var then = new Date(isoLike);
+    if (isNaN(then.getTime())) return '';
+    var diffMin = Math.round((Date.now() - then.getTime()) / 60000);
+    if (diffMin < 1) return 'just now';
+    if (diffMin < 60) return diffMin + 'm ago';
+    var diffHr = Math.round(diffMin / 60);
+    if (diffHr < 24) return diffHr + 'h ago';
+    return Math.round(diffHr / 24) + 'd ago';
+  }
+
+  /** Where clicking a notification should navigate, based on what it's about and who's looking — a page that doesn't exist for this role/type just does nothing beyond marking it read. */
+  function pageForNotification_(relatedTable, role) {
+    var map = {
+      Invoices: { Admin: 'expenses', HubManager: 'myexpenses' },
+      Expenses: { Admin: 'expenses', HubManager: 'myexpenses' },
+      Reimbursements: { Admin: 'expenses', HubManager: 'myexpenses' },
+      FundingTransactions: { Admin: 'financeaccounts' },
+      BankStatements: { Admin: 'financeaccounts' },
+      FinancialAccounts: { Admin: 'financedashboard' },
+      BudgetLines: { Admin: 'financedashboard' },
+      Projects: { Admin: 'projects', HubManager: 'myprojects' },
+      ReportingQuotas: { Admin: 'quotas', HubManager: 'myprojects' },
+      Feedback: { Admin: 'usageoverview', HubManager: 'myhubusage' },
+      DeviceRequests: { HubManager: 'mydevices' }, // fallback only — normally intercepted above and opened as a modal instead
+      HubManagers: { Admin: 'managers' }
+    };
+    return (map[relatedTable] && map[relatedTable][role]) || null;
+  }
+
+  function handleMarkAllRead() {
+    runServer('markAllNotificationsRead', token()).then(function () { fetchNotifications(); });
+  }
+
+  window.Notifications = {
+    openNotification: function (id) {
+      var n = notificationsCache.filter(function (r) { return r.NotificationID === id; })[0];
+      if (!n) return;
+      if (!n.isRead) runServer('markNotificationRead', token(), id).then(fetchNotifications);
+
+      // Device approval needs to be fast and foolproof for non-technical
+      // Hub Managers — a modal right here beats sending them to learn a
+      // new page. See DeviceRequestsJS.html.
+      if (n.RelatedTable === 'DeviceRequests' && window.DeviceRequests) {
+        window.DeviceRequests.openApprovalModal(n.RelatedRecordID);
+        return;
+      }
+
+      var page = window.MNE_CURRENT_USER && pageForNotification_(n.RelatedTable, window.MNE_CURRENT_USER.role);
+      if (page) loadPage(page);
+    }
+  };
+
+  window.initNotifications = initNotifications;
+})();
+</script>

@@ -1,0 +1,196 @@
+<div class="page-header">
+  <div>
+    <h4>Hub Usage</h4>
+    <p>Record Hub Visits — reach counts even without a computer used</p>
+  </div>
+  <div class="d-flex gap-2">
+    <button class="btn btn-light" id="btn-manual-session"><i class="bi bi-pencil-square"></i> Manual Session Entry</button>
+    <button class="btn btn-primary" id="btn-record-visit"><i class="bi bi-door-open"></i> Record Visit</button>
+  </div>
+</div>
+
+<div class="mini-stat-grid mb-3" id="hubusage-stats">
+  <div class="mini-stat-card"><i class="bi bi-door-open mini-stat-icon"></i><div class="mini-stat-value" id="stat-today-visits">&mdash;</div><div class="mini-stat-label">Visitors Today</div></div>
+  <div class="mini-stat-card"><i class="bi bi-people mini-stat-icon"></i><div class="mini-stat-value" id="stat-today-unique">&mdash;</div><div class="mini-stat-label">Unique Today</div></div>
+  <div class="mini-stat-card"><i class="bi bi-arrow-repeat mini-stat-icon"></i><div class="mini-stat-value" id="stat-today-returning">&mdash;</div><div class="mini-stat-label">Returning Today</div></div>
+  <div class="mini-stat-card"><i class="bi bi-pc-display mini-stat-icon"></i><div class="mini-stat-value" id="stat-month-computerhours">&mdash;</div><div class="mini-stat-label">Computer Hours (Month)</div></div>
+  <div class="mini-stat-card"><i class="bi bi-speedometer2 mini-stat-icon"></i><div class="mini-stat-value" id="stat-month-utilization">&mdash;</div><div class="mini-stat-label">Utilization (Month)</div></div>
+</div>
+
+<div class="pill-tabs animate-float-up">
+  <button type="button" class="pill-tab active" data-tab="visits">Individual Visits</button>
+  <button type="button" class="pill-tab" data-tab="computerusage">Computer Usage</button>
+  <button type="button" class="pill-tab" data-tab="dataquality">Data Quality</button>
+  <button type="button" class="pill-tab" data-tab="feedback">Feedback</button>
+</div>
+
+<!-- Individual Visits -->
+<div class="card-surface usage-pane" id="pane-visits">
+  <div class="toolbar mb-3">
+    <div class="search-box">
+      <i class="bi bi-search"></i>
+      <input type="text" class="form-control" id="visits-search" placeholder="Search by notes…">
+    </div>
+  </div>
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Date</th><th>Beneficiary</th><th>Arrival</th><th>Departure</th><th>Duration</th><th>Activities</th><th>PC Used</th></tr></thead>
+      <tbody id="visits-table-body"><tr><td colspan="8" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+  <div class="d-flex justify-content-between align-items-center mt-2">
+    <small class="text-muted" id="visits-summary"></small>
+    <div id="visits-pagination"></div>
+  </div>
+</div>
+
+<!-- Computer Usage -->
+<div class="card-surface usage-pane d-none" id="pane-computerusage">
+  <h6 class="mb-3">Computers</h6>
+  <div class="table-responsive mb-4">
+    <table class="table align-middle">
+      <thead><tr><th>Computer</th><th>Item</th><th>Status</th><th class="text-end">Action</th></tr></thead>
+      <tbody id="computers-table-body"><tr><td colspan="4" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+  <h6 class="mb-3">Recent Sessions</h6>
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Computer</th><th>Beneficiary</th><th>Login</th><th>Logout</th><th>Duration</th><th>Status</th></tr></thead>
+      <tbody id="sessions-table-body"><tr><td colspan="6" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+  <div class="d-flex justify-content-between align-items-center mt-2">
+    <small class="text-muted" id="sessions-summary"></small>
+    <div id="sessions-pagination"></div>
+  </div>
+</div>
+
+<!-- Data Quality -->
+<div class="card-surface usage-pane d-none" id="pane-dataquality">
+  <h6 class="mb-3">Data Quality Issues at this Hub</h6>
+  <div id="dataquality-list"><p class="text-muted text-center py-4">Loading…</p></div>
+</div>
+
+<!-- Feedback -->
+<div class="card-surface usage-pane d-none" id="pane-feedback">
+  <h6 class="mb-3">Beneficiary Feedback at this Hub</h6>
+  <div id="feedback-list"><p class="text-muted text-center py-4">Loading…</p></div>
+  <div class="d-flex justify-content-between align-items-center mt-3">
+    <small class="text-muted" id="feedback-summary"></small>
+    <div id="feedback-pagination"></div>
+  </div>
+</div>
+
+<!-- Record Visit Modal -->
+<div class="modal fade" id="recordVisitModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <form id="visit-form" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title">Record Hub Visit</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label">Beneficiary</label>
+            <div class="input-group">
+              <input type="text" class="form-control" id="visit-beneficiary-search" placeholder="Search by first name…">
+              <button type="button" class="btn btn-light" id="btn-visit-find-beneficiary">Search</button>
+            </div>
+            <div id="visit-beneficiary-results" class="mt-2"></div>
+            <input type="hidden" id="visit-beneficiary-id">
+            <div class="mt-2 small" id="visit-beneficiary-selected"></div>
+          </div>
+          <div class="row">
+            <div class="col mb-3">
+              <label class="form-label">Date</label>
+              <input type="date" class="form-control" id="visit-date" required>
+            </div>
+            <div class="col mb-3">
+              <label class="form-label">Arrival Time</label>
+              <input type="time" class="form-control" id="visit-arrival" required>
+            </div>
+            <div class="col mb-3">
+              <label class="form-label">Departure Time <span class="text-muted">(optional)</span></label>
+              <input type="time" class="form-control" id="visit-departure">
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Visitor Type</label>
+            <select class="form-select" id="visit-visitortype" required></select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Activities</label>
+            <div id="visit-activities" class="d-flex flex-wrap gap-2"></div>
+          </div>
+          <div class="form-check mb-2">
+            <input class="form-check-input" type="checkbox" id="visit-computerused">
+            <label class="form-check-label" for="visit-computerused">Computer(s) used during this visit</label>
+          </div>
+          <div class="mb-3 d-none" id="visit-numcomputers-wrap">
+            <label class="form-label">Number of computers used</label>
+            <input type="number" class="form-control" id="visit-numcomputers" min="1">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Notes <span class="text-muted">(optional)</span></label>
+            <textarea class="form-control" id="visit-notes" maxlength="500" rows="2"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="visit-save-btn">Save Visit</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Manual Session Entry Modal -->
+<div class="modal fade" id="manualSessionModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="manual-session-form" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title">Log a Computer Session</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label">Computer</label>
+            <select class="form-select" id="manual-computer" required></select>
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Beneficiary</label>
+            <div class="input-group">
+              <input type="text" class="form-control" id="manual-beneficiary-search" placeholder="Search by first name…">
+              <button type="button" class="btn btn-light" id="btn-manual-find">Search</button>
+            </div>
+            <div id="manual-beneficiary-results" class="mt-2"></div>
+            <input type="hidden" id="manual-beneficiary-id">
+            <div class="mt-2 small mb-2" id="manual-beneficiary-selected"></div>
+          </div>
+          <div class="row">
+            <div class="col mb-3">
+              <label class="form-label">Date</label>
+              <input type="date" class="form-control" id="manual-date" required>
+            </div>
+            <div class="col mb-3">
+              <label class="form-label">Login Time</label>
+              <input type="time" class="form-control" id="manual-login" required>
+            </div>
+            <div class="col mb-3">
+              <label class="form-label">Logout Time</label>
+              <input type="time" class="form-control" id="manual-logout" required>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="manual-session-save-btn">Save Session</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>

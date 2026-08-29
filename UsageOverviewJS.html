@@ -1,0 +1,217 @@
+<script>
+(function () {
+  var allIssues = [];
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'usageoverview') return;
+    if (!window.MNE_CURRENT_USER || window.MNE_CURRENT_USER.role !== 'Admin') return;
+    initUsageOverviewPage();
+  });
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  function initUsageOverviewPage() {
+    document.querySelectorAll('.pill-tab').forEach(function (tab) {
+      tab.addEventListener('click', function () { switchTab(tab.dataset.tab); });
+    });
+    document.getElementById('dq-hub-filter').addEventListener('change', renderDataQuality);
+    document.getElementById('btn-generate-insight').addEventListener('click', handleGenerateInsight);
+    document.getElementById('feedback-hub-filter').addEventListener('change', function (e) {
+      feedbackState.hubId = e.target.value; feedbackState.page = 1; fetchFeedback();
+    });
+    document.getElementById('overview-country-filter').addEventListener('change', fetchOverview);
+
+    loadOverviewCountryOptions();
+    fetchOverview();
+    loadHubOptionsForFilter();
+  }
+
+  function switchTab(tabKey) {
+    document.querySelectorAll('.pill-tab').forEach(function (t) { t.classList.toggle('active', t.dataset.tab === tabKey); });
+    document.querySelectorAll('.usage-pane').forEach(function (p) { p.classList.add('d-none'); });
+    document.getElementById('pane-' + tabKey).classList.remove('d-none');
+    if (tabKey === 'dataquality') fetchDataQuality();
+    if (tabKey === 'aiinsights') fetchAIInsights();
+    if (tabKey === 'feedback') fetchFeedback();
+  }
+
+  function loadOverviewCountryOptions() {
+    return runServer('getCountryOptions', token()).then(function (res) {
+      if (!res.success) return;
+      document.getElementById('overview-country-filter').innerHTML = '<option value="">All Countries</option>' +
+        res.data.map(function (c) { return '<option value="' + c.id + '">' + escapeHtml(c.name) + '</option>'; }).join('');
+    });
+  }
+
+  function fetchOverview() {
+    var countryId = document.getElementById('overview-country-filter').value;
+    runServer('getGlobalUsageDashboard', token(), { countryId: countryId }).then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      var d = res.data;
+      document.getElementById('ov-hubs').textContent = d.totalHubs;
+      document.getElementById('ov-uniqueusers').textContent = d.totals.uniqueUsers;
+      document.getElementById('ov-totalvisits').textContent = d.totals.totalVisits;
+      document.getElementById('ov-computerhours').textContent = Math.round(d.totals.computerHours * 10) / 10;
+      document.getElementById('ov-period-label').textContent = d.periodLabel;
+
+      document.getElementById('ov-most-active').textContent = d.mostActiveHub ? d.mostActiveHub.hubName + ' (' + d.mostActiveHub.totalVisits + ')' : 'N/A';
+      document.getElementById('ov-least-active').textContent = d.leastActiveHub ? d.leastActiveHub.hubName + ' (' + d.leastActiveHub.totalVisits + ')' : 'N/A';
+      document.getElementById('ov-highest-util').textContent = d.highestUtilizationHub ? d.highestUtilizationHub.hubName + ' (' + d.highestUtilizationHub.utilizationPct + '%)' : 'N/A';
+      document.getElementById('ov-lowest-util').textContent = d.lowestUtilizationHub ? d.lowestUtilizationHub.hubName + ' (' + d.lowestUtilizationHub.utilizationPct + '%)' : 'N/A';
+
+      var tbody = document.getElementById('hub-comparison-table-body');
+      if (!d.perHub.length) { tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">No Hubs yet.</td></tr>'; return; }
+      tbody.innerHTML = d.perHub.map(function (h) {
+        return '<tr>' +
+          '<td class="fw-medium">' + escapeHtml(h.hubName) + '</td>' +
+          '<td>' + h.uniqueUsers + '</td>' +
+          '<td>' + h.totalVisits + '</td>' +
+          '<td>' + Math.round(h.computerHours * 10) / 10 + '</td>' +
+          '<td>' + (h.utilizationPct !== null ? h.utilizationPct + '%' : 'N/A') + '</td>' +
+        '</tr>';
+      }).join('');
+    });
+  }
+
+  function loadHubOptionsForFilter() {
+    runServer('getHubOptions', token()).then(function (res) {
+      if (!res.success) return;
+      var opts = res.data.map(function (h) { return '<option value="' + h.id + '">' + escapeHtml(h.name) + '</option>'; }).join('');
+      document.getElementById('dq-hub-filter').innerHTML = '<option value="">All Hubs</option>' + opts;
+      document.getElementById('ai-hub-select').innerHTML = '<option value="">Global (all Hubs)</option>' + opts;
+      document.getElementById('feedback-hub-filter').innerHTML = '<option value="">All Hubs</option>' + opts;
+    });
+  }
+
+  // ---------- Feedback ----------
+  var feedbackState = { hubId: '', page: 1, pageSize: 10 };
+
+  function fetchFeedback() {
+    var el = document.getElementById('feedback-list');
+    el.innerHTML = '<p class="text-muted text-center py-4">Loading…</p>';
+    runServer('getAllFeedback', token(), feedbackState).then(function (res) {
+      if (!res.success) { el.innerHTML = '<p class="text-danger text-center py-4">' + res.message + '</p>'; return; }
+      renderFeedback(res.data.records);
+      var p = res.data.pagination;
+      var start = (p.page - 1) * p.pageSize + 1;
+      var end = Math.min(p.page * p.pageSize, p.totalRecords);
+      document.getElementById('feedback-summary').textContent = p.totalRecords === 0 ? 'No records' : ('Showing ' + start + '–' + end + ' of ' + p.totalRecords);
+      renderPagination('feedback-pagination', p, function (pg) { feedbackState.page = pg; fetchFeedback(); });
+    });
+  }
+
+  function renderFeedback(records) {
+    var el = document.getElementById('feedback-list');
+    if (!records.length) { el.innerHTML = '<p class="text-muted text-center py-4">No feedback yet.</p>'; return; }
+    el.innerHTML = records.map(function (f) {
+      var stars = f.Rating ? '<span class="text-warning">' + '★'.repeat(Number(f.Rating)) + '</span> ' : '';
+      return '<div class="card-surface p-3 mb-2">' +
+        '<div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-1">' +
+          '<div><strong>' + escapeHtml(f.BeneficiaryName || '(anonymous)') + '</strong>' +
+          ' <span class="text-muted small">' + escapeHtml(f.HubName || '') + ' · ' + escapeHtml(formatDateDisplay(f.DateCreated)) + '</span></div>' +
+          stars +
+        '</div>' +
+        '<div style="white-space:pre-wrap">' + escapeHtml(f.Message) + '</div>' +
+      '</div>';
+    }).join('');
+  }
+
+  // ---------- AI Insights ----------
+  function fetchAIInsights() {
+    var el = document.getElementById('ai-insights-list');
+    el.innerHTML = '<p class="text-muted text-center py-4">Loading…</p>';
+    runServer('getAIInsights', token(), '').then(function (res) {
+      if (!res.success) { el.innerHTML = '<p class="text-danger text-center py-4">' + res.message + '</p>'; return; }
+      renderAIInsights(res.data);
+    });
+  }
+
+  function renderAIInsights(insights) {
+    var el = document.getElementById('ai-insights-list');
+    if (!insights.length) { el.innerHTML = '<p class="text-muted text-center py-4">No insights generated yet.</p>'; return; }
+    el.innerHTML = insights.map(function (insight) {
+      var kpis = JSON.parse(insight.InputDataJSON || '{}').kpis || {};
+      var anomalies = JSON.parse(insight.AnomalyFlags || '[]');
+      var scopeLabel = insight.Level === 'Global' ? 'Global' : insight.ScopeID;
+      return '<div class="card-surface p-3 mb-3">' +
+        '<div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-2">' +
+          '<div><span class="badge bg-info text-dark me-2">AI-GENERATED</span><strong>' + escapeHtml(scopeLabel) + '</strong>' +
+          ' <span class="text-muted small">(' + escapeHtml(insight.PeriodStart) + ' to ' + escapeHtml(insight.PeriodEnd) + ')</span></div>' +
+          (insight.Reviewed === true || insight.Reviewed === 'true'
+            ? '<span class="badge badge-active">Reviewed</span>'
+            : '<button class="btn btn-sm btn-light" onclick="UsageOverview.markReviewed(\'' + insight.InsightID + '\')">Mark Reviewed</button>') +
+        '</div>' +
+        '<div class="mb-2" style="white-space:pre-wrap">' + escapeHtml(insight.NarrativeText) + '</div>' +
+        '<div class="small text-muted"><strong>Source numbers:</strong> ' + Object.keys(kpis).map(function (k) { return k + '=' + kpis[k]; }).join(', ') + '</div>' +
+        (anomalies.length ? '<div class="small text-warning mt-1"><strong>Anomalies:</strong> ' + anomalies.map(function (a) { return a.field + ' ' + a.direction + ' ' + a.pctChange + '%'; }).join(', ') + '</div>' : '') +
+      '</div>';
+    }).join('');
+  }
+
+  function handleGenerateInsight() {
+    var hubId = document.getElementById('ai-hub-select').value;
+    var btn = document.getElementById('btn-generate-insight');
+    btn.disabled = true;
+    btn.textContent = 'Generating…';
+    var call = hubId ? runServer('generateHubInsight', token(), hubId) : runServer('generateGlobalInsight', token());
+    call.then(function (res) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-stars"></i> Generate';
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Insight generated.', 'success');
+      fetchAIInsights();
+    }).catch(function (err) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-stars"></i> Generate';
+      showToast(err.message, 'danger');
+    });
+  }
+
+  function fetchDataQuality() {
+    var el = document.getElementById('dataquality-list');
+    el.innerHTML = '<p class="text-muted text-center py-4">Loading…</p>';
+    runServer('getAllDataQualityIssues', token()).then(function (res) {
+      if (!res.success) { el.innerHTML = '<p class="text-danger text-center py-4">' + res.message + '</p>'; return; }
+      allIssues = res.data;
+      renderDataQuality();
+    });
+  }
+
+  function renderDataQuality() {
+    var hubId = document.getElementById('dq-hub-filter').value;
+    var el = document.getElementById('dataquality-list');
+    var filtered = hubId ? allIssues.filter(function (i) { return i.HubID === hubId; }) : allIssues;
+
+    if (!filtered.length) { el.innerHTML = '<p class="text-muted text-center py-4">No open issues.</p>'; return; }
+    el.innerHTML = filtered.map(function (issue) {
+      var badge = issue.Severity === 'Block' ? 'bg-danger' : (issue.Severity === 'Warn' ? 'bg-warning text-dark' : 'bg-secondary');
+      return '<div class="card-surface p-3 mb-2 d-flex justify-content-between align-items-start flex-wrap gap-2">' +
+        '<div><span class="badge ' + badge + ' me-2">' + issue.Severity + '</span><strong>' + escapeHtml(issue.IssueType) + '</strong>' +
+        ' <span class="text-muted small">(' + escapeHtml(issue.HubName || '') + ')</span>' +
+        '<div class="small text-muted mt-1">' + escapeHtml(issue.Detail) + '</div></div>' +
+        '<div class="d-flex gap-1">' +
+          '<button class="btn btn-sm btn-light" onclick="UsageOverview.resolveIssue(\'' + issue.IssueID + '\', \'Resolved\')">Resolve</button>' +
+          '<button class="btn btn-sm btn-light" onclick="UsageOverview.resolveIssue(\'' + issue.IssueID + '\', \'Ignored\')">Ignore</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  }
+
+  window.UsageOverview = {
+    markReviewed: function (insightId) {
+      runServer('markInsightReviewed', token(), insightId).then(function (res) {
+        if (!res.success) { showToast(res.message, 'danger'); return; }
+        showToast('Marked reviewed.', 'success');
+        fetchAIInsights();
+      });
+    },
+    resolveIssue: function (issueId, status) {
+      runServer('resolveDataQualityIssue', token(), issueId, status).then(function (res) {
+        if (!res.success) { showToast(res.message, 'danger'); return; }
+        showToast('Issue ' + status.toLowerCase() + '.', 'success');
+        fetchDataQuality();
+      });
+    }
+  };
+})();
+</script>

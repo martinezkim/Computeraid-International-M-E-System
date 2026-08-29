@@ -1,0 +1,130 @@
+<div class="page-header animate-float-up">
+  <div>
+    <h4>Reporting Quotas</h4>
+    <p>Set up the quarters and reporting years Hub Managers file projects against</p>
+  </div>
+  <button class="btn btn-primary" id="btn-add-quota">
+    <i class="bi bi-plus-lg"></i> Add Reporting Quota
+  </button>
+</div>
+
+<div class="card-surface animate-float-up">
+  <div class="toolbar mb-3">
+    <div class="search-box">
+      <i class="bi bi-search"></i>
+      <input type="text" class="form-control" id="quota-search" placeholder="Search quotas…">
+    </div>
+
+    <select class="form-select w-auto" id="quota-sort">
+      <option value="YearLabel:desc">Year (Newest)</option>
+      <option value="YearLabel:asc">Year (Oldest)</option>
+      <option value="Quarter:asc">Quarter</option>
+      <option value="ProjectCount:desc">Most Projects</option>
+    </select>
+
+    <select class="form-select w-auto" id="quota-page-size">
+      <option value="10">10 / page</option>
+      <option value="25">25 / page</option>
+      <option value="50">50 / page</option>
+    </select>
+  </div>
+
+  <div class="project-grid" id="quotas-grid">
+    <div class="text-center text-muted py-4" style="grid-column: 1 / -1;">Loading…</div>
+  </div>
+
+  <div class="d-flex justify-content-between align-items-center mt-3">
+    <small class="text-muted" id="quotas-summary"></small>
+    <div id="quotas-pagination"></div>
+  </div>
+</div>
+
+<!-- Add / Edit Modal -->
+<div class="modal fade" id="quotaModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="quota-form" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title" id="quotaModalLabel">Add Reporting Quota</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="quota-id">
+
+          <div class="mb-3">
+            <label class="form-label">Quarter</label>
+            <select class="form-select" id="quota-quarter" required>
+              <option value="">Select a quarter…</option>
+              <option value="Q1">Q1</option>
+              <option value="Q2">Q2</option>
+              <option value="Q3">Q3</option>
+            </select>
+            <div class="form-text">Just this quarter's display name now — its actual dates are set below, not derived from this.</div>
+            <div class="invalid-feedback">Please select a quarter.</div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Reporting Year</label>
+            <input type="text" class="form-control" id="quota-year" required placeholder="e.g. 2026" pattern="\d{4}" maxlength="4">
+            <div class="form-text">Format: YYYY, e.g. 2026 — used for the quota's display label and default sort order.</div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Project Year</label>
+            <input type="text" class="form-control" id="quota-projectyear" required placeholder="e.g. 2026">
+            <div class="form-text">Groups quarters into one project cycle for reporting — doesn't have to match the calendar year above.</div>
+          </div>
+
+          <div class="row">
+            <div class="col-6 mb-3">
+              <label class="form-label">Quarter Start Date</label>
+              <input type="date" class="form-control" id="quota-start" required>
+            </div>
+            <div class="col-6 mb-3">
+              <label class="form-label">Quarter End Date</label>
+              <input type="date" class="form-control" id="quota-end" required>
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <div class="alert alert-light border small mb-0 d-flex align-items-center gap-2" id="quota-monthrange-hint">
+              <i class="bi bi-calendar-range"></i> <span>Set the start and end dates to see the range.</span>
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Status</label>
+            <select class="form-select" id="quota-status">
+              <option value="Active">Active</option>
+              <option value="Inactive">Inactive</option>
+            </select>
+            <div class="form-text">Only Active quotas are selectable when a Hub Manager adds a project.</div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="quota-save-btn">Save Reporting Quota</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div class="modal fade" id="quotaDeleteModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Delete Reporting Quota</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        Are you sure you want to delete <strong id="delete-quota-name"></strong>? This cannot be undone.
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-danger" id="confirm-delete-quota">Delete</button>
+      </div>
+    </div>
+  </div>
+</div>

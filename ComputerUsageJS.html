@@ -1,0 +1,110 @@
+<script>
+(function () {
+  var sessionsState = { hubId: '', sortBy: 'LoginTime', sortDir: 'desc', page: 1, pageSize: 10 };
+
+  var SESSION_EXPORT_COLUMNS = [
+    { key: 'HubName', label: 'Hub' }, { key: 'ComputerID', label: 'Computer' },
+    { key: 'BeneficiaryFirstName', label: 'Beneficiary' }, { key: 'LoginTime', label: 'Login' },
+    { key: 'LogoutTime', label: 'Logout' }, { key: 'DurationMinutes', label: 'Duration (min)' },
+    { key: 'EntryMethod', label: 'Entry Method' }, { key: 'Status', label: 'Status' }
+  ];
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'computerusage') return;
+    if (!window.MNE_CURRENT_USER || window.MNE_CURRENT_USER.role !== 'Admin') return;
+    initComputerUsagePage();
+  });
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  function initComputerUsagePage() {
+    sessionsState = { hubId: '', sortBy: 'LoginTime', sortDir: 'desc', page: 1, pageSize: 10 };
+
+    document.getElementById('computers-hub-filter').addEventListener('change', fetchComputers);
+    document.getElementById('sessions-hub-filter').addEventListener('change', function (e) {
+      sessionsState.hubId = e.target.value; sessionsState.page = 1; fetchSessions();
+    });
+    document.querySelectorAll('[data-format]').forEach(function (link) {
+      link.addEventListener('click', function (e) { e.preventDefault(); runExport(link.dataset.format); });
+    });
+
+    loadHubOptions().then(function () {
+      fetchComputers();
+      fetchSessions();
+    });
+  }
+
+  function loadHubOptions() {
+    return runServer('getHubOptions').then(function (res) {
+      if (!res.success) return;
+      var opts = res.data.map(function (h) { return '<option value="' + h.id + '">' + escapeHtml(h.name) + '</option>'; }).join('');
+      document.getElementById('computers-hub-filter').innerHTML = '<option value="">All Hubs</option>' + opts;
+      document.getElementById('sessions-hub-filter').innerHTML = '<option value="">All Hubs</option>' + opts;
+    });
+  }
+
+  function fetchComputers() {
+    var tbody = document.getElementById('computers-table-body');
+    tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-4">Loading…</td></tr>';
+    var hubId = document.getElementById('computers-hub-filter').value;
+    runServer('getAllComputers', token(), hubId).then(function (res) {
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="4" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      if (!res.data.length) { tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-4">No computers registered yet.</td></tr>'; return; }
+      tbody.innerHTML = res.data.map(function (c) {
+        var badge = c.Status === 'In Use' ? 'badge-status-inuse' : (c.Status === 'Faulty' ? 'badge-status-faulty' : 'badge-status-instorage');
+        return '<tr>' +
+          '<td class="text-muted">' + c.ComputerID + '</td>' +
+          '<td>' + escapeHtml(c.HubName || '') + '</td>' +
+          '<td class="fw-medium">' + escapeHtml(c.ItemName) + '</td>' +
+          '<td><span class="badge ' + badge + '">' + escapeHtml(c.Status) + '</span></td>' +
+        '</tr>';
+      }).join('');
+    });
+  }
+
+  function fetchSessions() {
+    var tbody = document.getElementById('sessions-table-body');
+    tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">Loading…</td></tr>';
+    runServer('getAllComputerSessions', token(), sessionsState).then(function (res) {
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="7" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      renderSessions(res.data.records);
+      var p = res.data.pagination;
+      var el = document.getElementById('sessions-summary');
+      var start = (p.page - 1) * p.pageSize + 1;
+      var end = Math.min(p.page * p.pageSize, p.totalRecords);
+      el.textContent = p.totalRecords === 0 ? 'No records' : ('Showing ' + start + '–' + end + ' of ' + p.totalRecords);
+      renderPagination('sessions-pagination', p, function (pg) { sessionsState.page = pg; fetchSessions(); });
+    });
+  }
+
+  function renderSessions(records) {
+    var tbody = document.getElementById('sessions-table-body');
+    if (!records.length) { tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">No sessions found.</td></tr>'; return; }
+    tbody.innerHTML = records.map(function (s) {
+      return '<tr>' +
+        '<td>' + escapeHtml(s.HubName || '') + '</td>' +
+        '<td>' + s.ComputerID + '</td>' +
+        '<td class="fw-medium">' + escapeHtml(s.BeneficiaryFirstName || '') + '</td>' +
+        '<td>' + formatDateTimeShort_(s.LoginTime) + '</td>' +
+        '<td>' + (s.LogoutTime ? formatDateTimeShort_(s.LogoutTime) : '&mdash;') + '</td>' +
+        '<td>' + (s.DurationMinutes !== '' ? s.DurationMinutes + ' min' : '&mdash;') + '</td>' +
+        '<td><span class="badge ' + (s.Status === 'Open' ? 'bg-warning text-dark' : 'badge-active') + '">' + s.Status + '</span></td>' +
+      '</tr>';
+    }).join('');
+  }
+
+  function formatDateTimeShort_(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return escapeHtml(iso);
+    return d.toLocaleString();
+  }
+
+  function runExport(format) {
+    runServer('getAllComputerSessions', token(), { hubId: sessionsState.hubId, page: 1, pageSize: 100000 }).then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      exportRecordsToFile(res.data.records, SESSION_EXPORT_COLUMNS, format, 'ComputerSessions_' + new Date().toISOString().slice(0, 10));
+    });
+  }
+})();
+</script>

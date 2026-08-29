@@ -1,0 +1,265 @@
+<script>
+(function () {
+  var addProjectModal, deleteModal;
+  var pendingDeleteId = null;
+  var myState = { search: '', sortBy: 'ProjectDate', sortDir: 'desc', page: 1, pageSize: 10, quotaId: '' };
+  var currentRecords = [];
+  var quotaOptionsCache = [];
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'myprojects') return;
+    if (!window.MNE_CURRENT_USER || window.MNE_CURRENT_USER.role !== 'HubManager') return;
+    initManagerProjectsPage();
+  });
+
+  function initManagerProjectsPage() {
+    myState = { search: '', sortBy: 'ProjectDate', sortDir: 'desc', page: 1, pageSize: 10, quotaId: '' };
+
+    var hubLabel = document.getElementById('manager-hub-label');
+    var hubId = window.MNE_CURRENT_USER.hubId;
+
+    runServer('getHubById', token(), hubId).then(function (res) {
+      hubLabel.textContent = res.success ? ('Hub: ' + res.data.name) : 'Your hub';
+    }).catch(function () {
+      hubLabel.textContent = 'Your hub';
+    });
+
+    initAddProjectModal();
+    deleteModal = new bootstrap.Modal(document.getElementById('projectDeleteModal'));
+    document.getElementById('confirm-delete-project').addEventListener('click', handleConfirmDelete);
+
+    document.getElementById('btn-add-project').addEventListener('click', openAddProjectModal);
+
+    document.getElementById('my-project-search').addEventListener('input', debounce(function (e) {
+      myState.search = e.target.value;
+      myState.page = 1;
+      fetchMyProjects();
+    }, 350));
+
+    document.getElementById('my-project-quota-filter').addEventListener('change', function (e) {
+      myState.quotaId = e.target.value;
+      myState.page = 1;
+      fetchMyProjects();
+    });
+
+    document.getElementById('my-project-sort').addEventListener('change', function (e) {
+      var parts = e.target.value.split(':');
+      myState.sortBy = parts[0];
+      myState.sortDir = parts[1];
+      myState.page = 1;
+      fetchMyProjects();
+    });
+
+    document.getElementById('my-project-page-size').addEventListener('change', function (e) {
+      myState.pageSize = parseInt(e.target.value, 10);
+      myState.page = 1;
+      fetchMyProjects();
+    });
+
+    loadQuotaOptions().then(fetchMyProjects);
+  }
+
+  function loadQuotaOptions() {
+    return runServer('getQuotaOptions', token()).then(function (res) {
+      quotaOptionsCache = res.success ? res.data : [];
+
+      var filterSelect = document.getElementById('my-project-quota-filter');
+      filterSelect.innerHTML = '<option value="">All Reporting Quotas</option>' +
+        quotaOptionsCache.map(function (q) { return '<option value="' + q.id + '">' + escapeHtml(q.label) + '</option>'; }).join('');
+    });
+  }
+
+  function fetchMyProjects() {
+    var grid = document.getElementById('my-projects-grid');
+    grid.innerHTML = '<div class="text-center text-muted py-4" style="grid-column: 1 / -1;">Loading…</div>';
+
+    runServer('getMyProjects', token(), myState).then(function (res) {
+      if (!res.success) {
+        grid.innerHTML = '<div class="alert alert-danger" style="grid-column: 1 / -1;">' + res.message + '</div>';
+        return;
+      }
+      currentRecords = res.data.records;
+      renderCards(currentRecords);
+      renderSummary(res.data.pagination);
+      renderPagination('my-projects-pagination', res.data.pagination, function (p) {
+        myState.page = p;
+        fetchMyProjects();
+      });
+    }).catch(function (err) {
+      grid.innerHTML = '<div class="alert alert-danger" style="grid-column: 1 / -1;">' + err.message + '</div>';
+    });
+  }
+
+  function renderCards(records) {
+    var grid = document.getElementById('my-projects-grid');
+    if (!records.length) {
+      grid.innerHTML = '<div class="text-center text-muted py-4" style="grid-column: 1 / -1;">No projects added yet. Click "Add Project" to add your first one.</div>';
+      return;
+    }
+
+    grid.innerHTML = records.map(function (p) {
+      var badge = p.Status === 'Active' ? 'badge-active' : 'badge-inactive';
+      var badgeLabel = p.Status === 'Submitted' ? 'Filed' : p.Status;
+      var quotaLine = p.ProjectDate
+        ? '<div class="project-card-quota">' + escapeHtml(p.QuotaLabel || '—') + '</div>' +
+          '<div class="project-card-date"><i class="bi bi-calendar3"></i> ' + escapeHtml(formatDateRangeDisplay(p.ProjectDate, p.ProjectEndDate)) + '</div>'
+        : '<div class="project-card-quota text-muted">Not yet activated</div>';
+      var toggleBtn = p.Status === 'Submitted' ? '' :
+        '<button type="button" class="btn btn-sm btn-light project-toggle-btn mt-2" data-project-id="' + p.ProjectID + '" data-next-status="' + (p.Status === 'Active' ? 'Inactive' : 'Active') + '">' +
+          (p.Status === 'Active' ? 'Set Inactive' : 'Set Active') +
+        '</button>';
+
+      return (
+        '<div class="project-card view-my-project-btn" data-project-id="' + p.ProjectID + '">' +
+          '<div class="d-flex justify-content-between align-items-start">' +
+            '<div class="project-card-name">' + escapeHtml(p.ProjectName || 'Untitled Project') + '</div>' +
+            '<span class="badge ' + badge + '">' + escapeHtml(badgeLabel) + '</span>' +
+          '</div>' +
+          quotaLine +
+          '<div class="project-card-stats">' +
+            '<div class="stat-block"><span class="stat-block-label">Beneficiaries</span><span class="stat-block-value">' + p.TotalNewBeneficiaries + '</span></div>' +
+            '<div class="stat-block"><span class="stat-block-label">Cost</span><span class="stat-block-value">' + formatCurrency(p.Cost) + '</span></div>' +
+          '</div>' +
+          '<div class="d-flex gap-2 mt-2">' +
+            toggleBtn +
+            '<button type="button" class="btn btn-sm btn-light text-danger project-delete-btn" data-project-id="' + p.ProjectID + '" title="Delete"><i class="bi bi-trash"></i></button>' +
+          '</div>' +
+        '</div>'
+      );
+    }).join('');
+  }
+
+  document.addEventListener('click', function (e) {
+    var toggleBtn = e.target.closest('.project-toggle-btn');
+    if (toggleBtn) {
+      e.stopPropagation();
+      handleToggleStatus(toggleBtn.dataset.projectId, toggleBtn.dataset.nextStatus);
+      return;
+    }
+
+    var deleteBtn = e.target.closest('.project-delete-btn');
+    if (deleteBtn) {
+      e.stopPropagation();
+      openDeleteConfirm(deleteBtn.dataset.projectId);
+      return;
+    }
+
+    var card = e.target.closest('.view-my-project-btn');
+    if (!card) return;
+    var project = currentRecords.find(function (p) { return p.ProjectID === card.dataset.projectId; });
+    if (!project) return;
+    var subtitle = project.ProjectDate
+      ? (project.QuotaLabel || '') + ' — ' + formatDateRangeDisplay(project.ProjectDate, project.ProjectEndDate)
+      : 'Not yet activated';
+    showProjectDetail(project, subtitle);
+  });
+
+  function handleToggleStatus(projectId, nextStatus) {
+    runServer('setProjectStatus', token(), projectId, nextStatus).then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Project set to ' + nextStatus + '.', 'success');
+      fetchMyProjects();
+    }).catch(function (err) {
+      showToast(err.message, 'danger');
+    });
+  }
+
+  function openDeleteConfirm(projectId) {
+    var project = currentRecords.find(function (p) { return p.ProjectID === projectId; });
+    if (!project) return;
+    pendingDeleteId = projectId;
+    document.getElementById('delete-project-name').textContent = project.ProjectName || 'this project';
+    deleteModal.show();
+  }
+
+  function handleConfirmDelete() {
+    if (!pendingDeleteId) return;
+    var btn = document.getElementById('confirm-delete-project');
+    btn.disabled = true;
+    runServer('deleteProject', token(), pendingDeleteId).then(function (res) {
+      btn.disabled = false;
+      deleteModal.hide();
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Project deleted.', 'success');
+      fetchMyProjects();
+    }).catch(function (err) {
+      btn.disabled = false;
+      deleteModal.hide();
+      showToast(err.message, 'danger');
+    });
+  }
+
+  function renderSummary(p) {
+    var el = document.getElementById('my-projects-summary');
+    var start = (p.page - 1) * p.pageSize + 1;
+    var end = Math.min(p.page * p.pageSize, p.totalRecords);
+    el.textContent = p.totalRecords === 0 ? 'No records' : ('Showing ' + start + '–' + end + ' of ' + p.totalRecords);
+  }
+
+  /**
+   * ============================================================
+   * ADD PROJECT
+   * ============================================================
+   * Just a name and a Cost — the reporting quota, dates, and every
+   * beneficiary stat are resolved automatically once the project is
+   * activated (see setProjectStatus/getProjectStats_ in Projects.gs).
+   * ============================================================
+   */
+
+  function initAddProjectModal() {
+    addProjectModal = new bootstrap.Modal(document.getElementById('addProjectModal'));
+    document.getElementById('add-project-submit-btn').addEventListener('click', handleSubmit);
+  }
+
+  function openAddProjectModal() {
+    document.getElementById('add-project-form').reset();
+    document.getElementById('add-project-error').classList.add('d-none');
+    document.getElementById('field-cost-symbol').textContent = (window.MNE_CURRENCY && window.MNE_CURRENCY.symbol) || 'KSh';
+    document.querySelectorAll('#add-project-form .is-invalid').forEach(function (el) {
+      el.classList.remove('is-invalid');
+    });
+    addProjectModal.show();
+  }
+
+  function handleSubmit() {
+    var name = document.getElementById('field-ProjectName');
+    var cost = document.getElementById('field-Cost');
+    var nameValid = name.value.trim() !== '';
+    var costValid = cost.value !== '' && Number(cost.value) >= 0;
+    name.classList.toggle('is-invalid', !nameValid);
+    cost.classList.toggle('is-invalid', !costValid);
+    if (!nameValid || !costValid) {
+      showToast('Please enter a project name and a cost of 0 or more.', 'danger');
+      return;
+    }
+
+    var data = { ProjectName: name.value.trim(), Cost: cost.value };
+    var btn = document.getElementById('add-project-submit-btn');
+    var errorBox = document.getElementById('add-project-error');
+    errorBox.classList.add('d-none');
+
+    btn.disabled = true;
+    btn.textContent = 'Adding…';
+
+    runServer('addProject', token(), data).then(function (res) {
+      btn.disabled = false;
+      btn.textContent = 'Add Project';
+      if (!res.success) {
+        errorBox.textContent = res.message;
+        errorBox.classList.remove('d-none');
+        return;
+      }
+      addProjectModal.hide();
+      showToast('Project "' + data.ProjectName + '" added — set it Active when ready for beneficiaries to join.', 'success');
+      fetchMyProjects();
+    }).catch(function (err) {
+      btn.disabled = false;
+      btn.textContent = 'Add Project';
+      errorBox.textContent = err.message;
+      errorBox.classList.remove('d-none');
+    });
+  }
+})();
+</script>

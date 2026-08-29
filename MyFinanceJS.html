@@ -1,0 +1,45 @@
+<script>
+(function () {
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'myfinance') return;
+    if (!window.MNE_CURRENT_USER || window.MNE_CURRENT_USER.role !== 'HubManager') return;
+    initMyFinancePage();
+  });
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  function initMyFinancePage() {
+    fetchSummary();
+  }
+
+  function fetchSummary() {
+    var el = document.getElementById('myfinance-accounts');
+    el.innerHTML = '<p class="text-muted text-center py-4">Loading…</p>';
+
+    runServer('getMyHubFinancialSummary', token()).then(function (res) {
+      if (!res.success) { el.innerHTML = '<p class="text-danger text-center py-4">' + res.message + '</p>'; return; }
+
+      if (!res.data.accounts.length) {
+        el.innerHTML = '<p class="text-muted text-center py-4">No financial accounts have been set up for your hub yet.</p>';
+      } else {
+        el.innerHTML = res.data.accounts.map(function (a) {
+          return '<div class="card-surface mb-3">' +
+            '<h6 class="mb-3">' + escapeHtml(a.accountName) + ' <span class="text-muted small">(' + escapeHtml(a.currency) + ')</span></h6>' +
+            '<div class="mini-stat-grid">' +
+              statCard('bi-clipboard-check', formatCurrencyIn(a.committedFunds, a.currency), 'Committed (Approved, Unpaid)') +
+              statCard('bi-hourglass-split', formatCurrencyIn(a.pendingApproval, a.currency), 'Pending Approval') +
+            '</div>' +
+          '</div>';
+        }).join('');
+      }
+
+      document.getElementById('myfinance-staffcost-month').textContent = res.data.staffCostThisMonth.month;
+      document.getElementById('myfinance-staffcost-total').textContent = formatCurrency(res.data.staffCostThisMonth.total);
+    });
+  }
+
+  function statCard(icon, value, label) {
+    return '<div class="mini-stat-card"><i class="bi ' + icon + ' mini-stat-icon"></i><div class="mini-stat-value">' + value + '</div><div class="mini-stat-label">' + label + '</div></div>';
+  }
+})();
+</script>

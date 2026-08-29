@@ -1,0 +1,607 @@
+<script>
+(function () {
+  var expenseModal, reimbursementModal, invoiceModal, viewModal, cancelModal;
+  var expensesState = { page: 1, pageSize: 10 };
+  var reimbState = { page: 1, pageSize: 10 };
+  var invoicesState = { page: 1, pageSize: 10 };
+  var recordCache = {}; // 'expense:ID' / 'reimbursement:ID' / 'invoice:ID' -> record
+  var categoryOptionsCache = [];
+  var projectOptionsCache = [];
+  var accountOptionsCache = [];
+  var staffOptionsCache = [];
+  var expenseDocUpload, reimbursementDocUpload;
+  var pendingCancel; // { kind, id }
+
+  var EXPENSE_FIELDS = [
+    ['PayeeName', 'Payee'], ['ExpenseCategory', 'Category'], ['Description', 'Description'],
+    ['Date', 'Date'], ['AccountName', 'Account'], ['PaymentMethod', 'Payment Method'],
+    ['PaymentDate', 'Payment Date'], ['PaymentReference', 'Payment Reference'], ['Notes', 'Notes']
+  ];
+  var REIMBURSEMENT_FIELDS = [
+    ['StaffName', 'Staff'], ['ExpenseCategory', 'Category'], ['ActivityRef', 'Activity'], ['Description', 'Description'],
+    ['Reason', 'Reason'], ['Date', 'Date'], ['AccountName', 'Account'], ['PaymentMethod', 'Payment Method'],
+    ['PaymentDate', 'Payment Date'], ['PaymentReference', 'Payment Reference']
+  ];
+  var INVOICE_FIELDS = [
+    ['InvoiceNumber', 'Invoice #'], ['SupplierName', 'Payee'], ['SupplierContact', 'Payee Contact'],
+    ['SupplierInvoiceRef', 'Reference'], ['ExpenseCategory', 'Category'], ['Description', 'Description'],
+    ['InvoiceDate', 'Invoice Date'], ['AccountName', 'Account'], ['PaymentMethod', 'Payment Method'],
+    ['DateSubmitted', 'Date Submitted'], ['ApprovalDate', 'Approval Date'],
+    ['PaymentDate', 'Payment Date'], ['PaymentReference', 'Payment Reference'], ['Notes', 'Notes']
+  ];
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'myexpenses') return;
+    if (!window.MNE_CURRENT_USER || window.MNE_CURRENT_USER.role !== 'HubManager') return;
+    initMyExpensesPage();
+  });
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  function initMyExpensesPage() {
+    expensesState = { page: 1, pageSize: 10 };
+    reimbState = { page: 1, pageSize: 10 };
+    invoicesState = { page: 1, pageSize: 10 };
+
+    expenseModal = new bootstrap.Modal(document.getElementById('myExpenseModal'));
+    reimbursementModal = new bootstrap.Modal(document.getElementById('myReimbursementModal'));
+    invoiceModal = new bootstrap.Modal(document.getElementById('myInvoiceModal'));
+    viewModal = new bootstrap.Modal(document.getElementById('myFinanceRecordViewModal'));
+    cancelModal = new bootstrap.Modal(document.getElementById('myFinanceRecordCancelModal'));
+
+    document.querySelectorAll('.pill-tab').forEach(function (tab) {
+      tab.addEventListener('click', function () { switchTab(tab.dataset.tab); });
+    });
+
+    document.getElementById('btn-add-expense').addEventListener('click', openAddExpense);
+    document.getElementById('myexpense-form').addEventListener('submit', handleSaveExpense);
+    document.getElementById('btn-add-reimbursement').addEventListener('click', openAddReimbursement);
+    document.getElementById('myreimbursement-form').addEventListener('submit', handleSaveReimbursement);
+    document.getElementById('btn-add-invoice').addEventListener('click', openAddInvoice);
+    document.getElementById('myinvoice-form').addEventListener('submit', handleSaveInvoice);
+    document.getElementById('confirm-myfinancerecord-cancel').addEventListener('click', handleConfirmCancel);
+
+    document.getElementById('btn-myinvoice-add-line').addEventListener('click', function () { addInvoiceLineRow(); });
+    document.getElementById('myinvoice-discount').addEventListener('input', recalcInvoiceTotals);
+    document.getElementById('myinvoice-taxrate').addEventListener('input', recalcInvoiceTotals);
+
+    expenseDocUpload = initFinanceDocumentUpload({ inputId: 'myexpense-document-input', statusId: 'myexpense-document-status', documentType: 'Receipt' });
+    reimbursementDocUpload = initFinanceDocumentUpload({ inputId: 'myreimbursement-document-input', statusId: 'myreimbursement-document-status', documentType: 'Receipt' });
+
+    // Sequential, not Promise.all — Apps Script queues concurrent doPost
+    // executions against the same deployment rather than truly running
+    // them in parallel, so 4-at-once measurably compounds into a much
+    // longer worst-case wait than the same 4 calls run one after another.
+    loadCategoryOptions().then(loadProjectOptions).then(loadAccountOptions).then(loadStaffOptions).then(fetchExpenses);
+  }
+
+  function loadCategoryOptions() {
+    return runServer('getFinanceCategoryOptions', token(), 'Expense').then(function (res) {
+      if (!res.success) return;
+      // Salaries are tracked separately in the Admin-only Salaries
+      // module (individual amounts must never reach a Hub Manager
+      // client) — excluded here so it can never be selected, matching
+      // the server-side guard in Expenses.gs/Reimbursements.gs/Invoices.gs.
+      categoryOptionsCache = res.data.filter(function (c) { return c.name !== 'Salaries'; });
+      var opts = '<option value="">Select…</option>' + categoryOptionsCache.map(function (c) { return '<option value="' + escapeHtml(c.name) + '">' + escapeHtml(c.name) + '</option>'; }).join('');
+      document.getElementById('myexpense-category').innerHTML = opts;
+      document.getElementById('myreimbursement-category').innerHTML = opts;
+      document.getElementById('myinvoice-category').innerHTML = opts;
+    });
+  }
+
+  function loadProjectOptions() {
+    return runServer('getProjectOptions', token()).then(function (res) {
+      if (!res.success) return;
+      var hubId = window.MNE_CURRENT_USER.hubId;
+      projectOptionsCache = res.data.filter(function (p) { return p.hubId === hubId; });
+      var opts = '<option value="">— None —</option>' + projectOptionsCache.map(function (p) { return '<option value="' + p.id + '">' + escapeHtml(p.name) + '</option>'; }).join('');
+      document.getElementById('myexpense-projectid').innerHTML = opts;
+      document.getElementById('myreimbursement-projectid').innerHTML = opts;
+      document.getElementById('myinvoice-projectid').innerHTML = opts;
+    });
+  }
+
+  function loadAccountOptions() {
+    return runServer('getFinancialAccountOptions', token()).then(function (res) {
+      if (!res.success) return;
+      accountOptionsCache = res.data;
+      var opts = accountOptionsCache.map(function (a) { return '<option value="' + a.id + '">' + escapeHtml(a.name) + ' (' + a.currency + ')</option>'; }).join('');
+      document.getElementById('myexpense-accountid').innerHTML = opts;
+      document.getElementById('myreimbursement-accountid').innerHTML = opts;
+      document.getElementById('myinvoice-accountid').innerHTML = opts;
+    });
+  }
+
+  function loadStaffOptions() {
+    return runServer('getFinanceStaffOptions', token()).then(function (res) {
+      if (!res.success) return;
+      staffOptionsCache = res.data;
+      document.getElementById('myexpense-staffid').innerHTML = '<option value="">— None —</option>' +
+        staffOptionsCache.map(function (s) { return '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>'; }).join('');
+      document.getElementById('myreimbursement-staffid').innerHTML = '<option value="">Select…</option>' +
+        staffOptionsCache.map(function (s) { return '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>'; }).join('');
+    });
+  }
+
+  function switchTab(tabKey) {
+    document.querySelectorAll('.pill-tab').forEach(function (t) { t.classList.toggle('active', t.dataset.tab === tabKey); });
+    document.querySelectorAll('.usage-config-pane').forEach(function (p) { p.classList.add('d-none'); });
+    document.getElementById('pane-' + tabKey).classList.remove('d-none');
+    if (tabKey === 'expenses') fetchExpenses();
+    if (tabKey === 'reimbursements') fetchReimbursements();
+    if (tabKey === 'invoices') fetchInvoices();
+  }
+
+  function statusBadgeClass(status) {
+    if (status === 'Approved') return 'badge-active';
+    if (status === 'Rejected' || status === 'Cancelled') return 'badge-inactive';
+    if (status === 'Returned') return 'bg-warning text-dark';
+    return 'bg-info text-dark';
+  }
+
+  // ---------- Expenses list ----------
+  function fetchExpenses() {
+    var tbody = document.getElementById('myexpenses-table-body');
+    tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">Loading…</td></tr>';
+    runServer('getMyHubExpenses', token(), expensesState).then(function (res) {
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="7" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      var records = res.data.records;
+      if (!records.length) { tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">No expenses submitted yet.</td></tr>'; return; }
+      tbody.innerHTML = records.map(function (x) {
+        recordCache['expense:' + x.ExpenseID] = x;
+        return '<tr class="beneficiary-row" onclick="MyExpenses.openView(\'expense\', \'' + x.ExpenseID + '\')">' +
+          '<td class="fw-medium">' + escapeHtml(x.PayeeName) + '</td>' +
+          '<td>' + escapeHtml(x.ExpenseCategory) + '</td>' +
+          '<td class="text-end">' + formatCurrencyIn(x.TotalAmount, x.Currency) + '</td>' +
+          '<td>' + formatDateDisplay(x.Date) + '</td>' +
+          '<td><span class="badge ' + statusBadgeClass(x.Status) + '">' + escapeHtml(x.Status) + '</span></td>' +
+          '<td><span class="badge ' + (x.PaymentStatus === 'Paid' ? 'badge-active' : 'badge-inactive') + '">' + escapeHtml(x.PaymentStatus) + '</span></td>' +
+          '<td class="text-end">' + (x.Status === 'Returned' ? '<button class="btn btn-sm btn-primary" onclick="event.stopPropagation(); MyExpenses.openResubmit(\'expense\', \'' + x.ExpenseID + '\')">Edit &amp; Resubmit</button>' : '') + '</td>' +
+        '</tr>';
+      }).join('');
+      renderSummary('myexpenses-summary', res.data.pagination);
+      renderPagination('myexpenses-pagination', res.data.pagination, function (p) { expensesState.page = p; fetchExpenses(); });
+    });
+  }
+
+  // ---------- Reimbursements list ----------
+  function fetchReimbursements() {
+    var tbody = document.getElementById('myreimbursements-table-body');
+    tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">Loading…</td></tr>';
+    runServer('getMyHubReimbursements', token(), reimbState).then(function (res) {
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="8" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      var records = res.data.records;
+      if (!records.length) { tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">No reimbursements submitted yet.</td></tr>'; return; }
+      tbody.innerHTML = records.map(function (r) {
+        recordCache['reimbursement:' + r.ReimbursementID] = r;
+        return '<tr class="beneficiary-row" onclick="MyExpenses.openView(\'reimbursement\', \'' + r.ReimbursementID + '\')">' +
+          '<td class="fw-medium">' + escapeHtml(r.StaffName || '') + '</td>' +
+          '<td>' + escapeHtml(r.ExpenseCategory) + '</td>' +
+          '<td class="text-end">' + formatCurrencyIn(r.Amount, r.Currency) + '</td>' +
+          '<td class="text-end">' + (r.ApprovedAmount !== '' && r.ApprovedAmount !== undefined ? formatCurrencyIn(r.ApprovedAmount, r.Currency) : '&mdash;') + '</td>' +
+          '<td>' + formatDateDisplay(r.Date) + '</td>' +
+          '<td><span class="badge ' + statusBadgeClass(r.Status) + '">' + escapeHtml(r.Status) + '</span></td>' +
+          '<td><span class="badge ' + (r.PaymentStatus === 'Paid' ? 'badge-active' : 'badge-inactive') + '">' + escapeHtml(r.PaymentStatus) + '</span></td>' +
+          '<td class="text-end">' + (r.Status === 'Returned' ? '<button class="btn btn-sm btn-primary" onclick="event.stopPropagation(); MyExpenses.openResubmit(\'reimbursement\', \'' + r.ReimbursementID + '\')">Edit &amp; Resubmit</button>' : '') + '</td>' +
+        '</tr>';
+      }).join('');
+      renderSummary('myreimbursements-summary', res.data.pagination);
+      renderPagination('myreimbursements-pagination', res.data.pagination, function (p) { reimbState.page = p; fetchReimbursements(); });
+    });
+  }
+
+  // ---------- Invoices list ----------
+  function fetchInvoices() {
+    var tbody = document.getElementById('myinvoices-table-body');
+    tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">Loading…</td></tr>';
+    runServer('getMyHubInvoices', token(), invoicesState).then(function (res) {
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="8" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      var records = res.data.records;
+      if (!records.length) { tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">No invoices submitted yet.</td></tr>'; return; }
+      tbody.innerHTML = records.map(function (i) {
+        recordCache['invoice:' + i.InvoiceID] = i;
+        return '<tr class="beneficiary-row" onclick="MyExpenses.openView(\'invoice\', \'' + i.InvoiceID + '\')">' +
+          '<td class="text-muted">' + escapeHtml(i.InvoiceNumber || i.InvoiceID) + '</td>' +
+          '<td class="fw-medium">' + escapeHtml(i.SupplierName) + '</td>' +
+          '<td>' + escapeHtml(i.ExpenseCategory) + '</td>' +
+          '<td class="text-end">' + formatCurrencyIn(i.TotalAmount, i.Currency) + '</td>' +
+          '<td>' + formatDateDisplay(String(i.DateSubmitted).slice(0, 10)) + '</td>' +
+          '<td><span class="badge ' + statusBadgeClass(i.Status) + '">' + escapeHtml(i.Status) + '</span></td>' +
+          '<td><span class="badge ' + (i.PaymentStatus === 'Paid' ? 'badge-active' : 'badge-inactive') + '">' + escapeHtml(i.PaymentStatus) + '</span></td>' +
+          '<td class="text-end">' +
+            (i.InvoiceDocumentID ? '<button class="btn btn-sm btn-light me-1" title="Download PDF" onclick="event.stopPropagation(); MyExpenses.viewDocument(\'' + i.InvoiceDocumentID + '\')"><i class="bi bi-file-earmark-pdf"></i></button>' : '') +
+            (i.Status === 'Returned' ? '<button class="btn btn-sm btn-primary" onclick="event.stopPropagation(); MyExpenses.openResubmit(\'invoice\', \'' + i.InvoiceID + '\')">Edit &amp; Resubmit</button>' : '') +
+          '</td>' +
+        '</tr>';
+      }).join('');
+      renderSummary('myinvoices-summary', res.data.pagination);
+      renderPagination('myinvoices-pagination', res.data.pagination, function (p) { invoicesState.page = p; fetchInvoices(); });
+    });
+  }
+
+  function renderSummary(elId, p) {
+    var el = document.getElementById(elId);
+    var start = (p.page - 1) * p.pageSize + 1;
+    var end = Math.min(p.page * p.pageSize, p.totalRecords);
+    el.textContent = p.totalRecords === 0 ? 'No records' : ('Showing ' + start + '–' + end + ' of ' + p.totalRecords);
+  }
+
+  // ---------- Submit / Resubmit Expense ----------
+  function resetExpenseForm() {
+    document.getElementById('myexpense-form').reset();
+    document.getElementById('myexpense-id').value = '';
+    document.getElementById('myexpense-return-banner').innerHTML = '';
+    document.getElementById('myexpense-date').value = new Date().toISOString().slice(0, 10);
+    expenseDocUpload.reset();
+  }
+
+  function openAddExpense() {
+    resetExpenseForm();
+    document.getElementById('myExpenseModalLabel').textContent = 'Submit Expense';
+    document.getElementById('myexpense-save-btn').textContent = 'Submit Expense';
+    expenseModal.show();
+  }
+
+  function openResubmitExpense(x) {
+    resetExpenseForm();
+    document.getElementById('myexpense-id').value = x.ExpenseID;
+    document.getElementById('myexpense-return-banner').innerHTML = '<div class="alert alert-warning small">Returned for correction: ' + escapeHtml(x.RejectionReason || '') + '</div>';
+    document.getElementById('myexpense-payeename').value = x.PayeeName;
+    document.getElementById('myexpense-staffid').value = x.StaffID || '';
+    document.getElementById('myexpense-date').value = x.Date;
+    document.getElementById('myexpense-category').value = x.ExpenseCategory;
+    document.getElementById('myexpense-projectid').value = x.ProjectID || '';
+    document.getElementById('myexpense-amount').value = x.Amount;
+    document.getElementById('myexpense-taxamount').value = x.TaxAmount || '';
+    document.getElementById('myexpense-accountid').value = x.AccountID;
+    document.getElementById('myexpense-paymentmethod').value = x.PaymentMethod || '';
+    document.getElementById('myexpense-description').value = x.Description || '';
+    document.getElementById('myexpense-notes').value = x.Notes || '';
+    if (x.ReceiptDocumentID) expenseDocUpload.setExisting(x.ReceiptDocumentID, 'Previously attached document');
+    document.getElementById('myExpenseModalLabel').textContent = 'Edit & Resubmit Expense';
+    document.getElementById('myexpense-save-btn').textContent = 'Resubmit Expense';
+    viewModal.hide();
+    expenseModal.show();
+  }
+
+  function handleSaveExpense(e) {
+    e.preventDefault();
+    var id = document.getElementById('myexpense-id').value;
+    var accountId = document.getElementById('myexpense-accountid').value;
+    var account = accountOptionsCache.filter(function (a) { return a.id === accountId; })[0];
+    var data = {
+      PayeeName: document.getElementById('myexpense-payeename').value.trim(),
+      StaffID: document.getElementById('myexpense-staffid').value,
+      Date: document.getElementById('myexpense-date').value,
+      ExpenseCategory: document.getElementById('myexpense-category').value,
+      ProjectID: document.getElementById('myexpense-projectid').value,
+      Amount: document.getElementById('myexpense-amount').value,
+      TaxAmount: document.getElementById('myexpense-taxamount').value,
+      AccountID: accountId,
+      Currency: account ? account.currency : '',
+      PaymentMethod: document.getElementById('myexpense-paymentmethod').value,
+      Description: document.getElementById('myexpense-description').value.trim(),
+      Notes: document.getElementById('myexpense-notes').value.trim(),
+      ReceiptDocumentID: expenseDocUpload.getDocumentId()
+    };
+    var btn = document.getElementById('myexpense-save-btn');
+    btn.disabled = true;
+    var call = id ? runServer('resubmitExpense', token(), id, data) : runServer('createExpense', token(), data);
+    call.then(function (res) {
+      btn.disabled = false;
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      expenseModal.hide();
+      showToast(id ? 'Expense resubmitted.' : 'Expense submitted.', 'success');
+      fetchExpenses();
+    }).catch(function (err) { btn.disabled = false; showToast(err.message, 'danger'); });
+  }
+
+  // ---------- Submit / Resubmit Reimbursement ----------
+  function resetReimbursementForm() {
+    document.getElementById('myreimbursement-form').reset();
+    document.getElementById('myreimbursement-id').value = '';
+    document.getElementById('myreimbursement-return-banner').innerHTML = '';
+    document.getElementById('myreimbursement-date').value = new Date().toISOString().slice(0, 10);
+    reimbursementDocUpload.reset();
+  }
+
+  function openAddReimbursement() {
+    resetReimbursementForm();
+    document.getElementById('myReimbursementModalLabel').textContent = 'Submit Reimbursement';
+    document.getElementById('myreimbursement-save-btn').textContent = 'Submit Reimbursement';
+    reimbursementModal.show();
+  }
+
+  function openResubmitReimbursement(r) {
+    resetReimbursementForm();
+    document.getElementById('myreimbursement-id').value = r.ReimbursementID;
+    document.getElementById('myreimbursement-return-banner').innerHTML = '<div class="alert alert-warning small">Returned for correction: ' + escapeHtml(r.RejectionReason || '') + '</div>';
+    document.getElementById('myreimbursement-staffid').value = r.StaffID;
+    document.getElementById('myreimbursement-date').value = r.Date;
+    document.getElementById('myreimbursement-category').value = r.ExpenseCategory;
+    document.getElementById('myreimbursement-activityref').value = r.ActivityRef || '';
+    document.getElementById('myreimbursement-projectid').value = r.ProjectID || '';
+    document.getElementById('myreimbursement-amount').value = r.Amount;
+    document.getElementById('myreimbursement-accountid').value = r.AccountID;
+    document.getElementById('myreimbursement-paymentmethod').value = r.PaymentMethod || '';
+    document.getElementById('myreimbursement-description').value = r.Description || '';
+    document.getElementById('myreimbursement-reason').value = r.Reason || '';
+    if (r.ReceiptDocumentID) reimbursementDocUpload.setExisting(r.ReceiptDocumentID, 'Previously attached document');
+    document.getElementById('myReimbursementModalLabel').textContent = 'Edit & Resubmit Reimbursement';
+    document.getElementById('myreimbursement-save-btn').textContent = 'Resubmit Reimbursement';
+    viewModal.hide();
+    reimbursementModal.show();
+  }
+
+  function handleSaveReimbursement(e) {
+    e.preventDefault();
+    var id = document.getElementById('myreimbursement-id').value;
+    var accountId = document.getElementById('myreimbursement-accountid').value;
+    var account = accountOptionsCache.filter(function (a) { return a.id === accountId; })[0];
+    var data = {
+      StaffID: document.getElementById('myreimbursement-staffid').value,
+      Date: document.getElementById('myreimbursement-date').value,
+      ExpenseCategory: document.getElementById('myreimbursement-category').value,
+      ActivityRef: document.getElementById('myreimbursement-activityref').value.trim(),
+      ProjectID: document.getElementById('myreimbursement-projectid').value,
+      Amount: document.getElementById('myreimbursement-amount').value,
+      AccountID: accountId,
+      Currency: account ? account.currency : '',
+      PaymentMethod: document.getElementById('myreimbursement-paymentmethod').value,
+      Description: document.getElementById('myreimbursement-description').value.trim(),
+      Reason: document.getElementById('myreimbursement-reason').value.trim(),
+      ReceiptDocumentID: reimbursementDocUpload.getDocumentId()
+    };
+    var btn = document.getElementById('myreimbursement-save-btn');
+    btn.disabled = true;
+    var call = id ? runServer('resubmitReimbursement', token(), id, data) : runServer('createReimbursement', token(), data);
+    call.then(function (res) {
+      btn.disabled = false;
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      reimbursementModal.hide();
+      showToast(id ? 'Reimbursement resubmitted.' : 'Reimbursement submitted.', 'success');
+      fetchReimbursements();
+    }).catch(function (err) { btn.disabled = false; showToast(err.message, 'danger'); });
+  }
+
+  // ---------- Submit / Resubmit Invoice (branded generated invoice) ----------
+  function addInvoiceLineRow(item) {
+    item = item || {};
+    var tbody = document.getElementById('myinvoice-lineitems-body');
+    var tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td><input type="text" class="form-control form-control-sm li-desc" maxlength="200"></td>' +
+      '<td><input type="number" class="form-control form-control-sm text-end li-unit" min="0" step="0.01"></td>' +
+      '<td><input type="number" class="form-control form-control-sm text-end li-qty" min="0" step="0.01"></td>' +
+      '<td><input type="number" class="form-control form-control-sm text-end li-amount" min="0" step="0.01"></td>' +
+      '<td class="text-center"><button type="button" class="btn btn-sm btn-light text-danger li-remove" title="Remove"><i class="bi bi-x-lg"></i></button></td>';
+    tr.querySelector('.li-desc').value = item.description || '';
+    tr.querySelector('.li-unit').value = item.unitCost || '';
+    tr.querySelector('.li-qty').value = item.qtyRate || '';
+    tr.querySelector('.li-amount').value = item.amount || '';
+
+    var unit = tr.querySelector('.li-unit');
+    var qty = tr.querySelector('.li-qty');
+    var amount = tr.querySelector('.li-amount');
+    function autoAmount() {
+      if (unit.value !== '' && qty.value !== '') amount.value = (Number(unit.value) * Number(qty.value)) || 0;
+      recalcInvoiceTotals();
+    }
+    unit.addEventListener('input', autoAmount);
+    qty.addEventListener('input', autoAmount);
+    amount.addEventListener('input', recalcInvoiceTotals);
+    tr.querySelector('.li-remove').addEventListener('click', function () {
+      var rows = tbody.querySelectorAll('tr');
+      if (rows.length > 1) tr.remove(); else clearInvoiceRow(tr);
+      recalcInvoiceTotals();
+    });
+
+    tbody.appendChild(tr);
+  }
+
+  function clearInvoiceRow(tr) {
+    tr.querySelectorAll('input').forEach(function (inp) { inp.value = ''; });
+  }
+
+  function collectInvoiceLineItems() {
+    return Array.prototype.map.call(document.querySelectorAll('#myinvoice-lineitems-body tr'), function (tr) {
+      return {
+        description: tr.querySelector('.li-desc').value.trim(),
+        unitCost: Number(tr.querySelector('.li-unit').value) || 0,
+        qtyRate: Number(tr.querySelector('.li-qty').value) || 0,
+        amount: Number(tr.querySelector('.li-amount').value) || 0
+      };
+    }).filter(function (it) { return it.description !== '' || it.amount !== 0; });
+  }
+
+  function recalcInvoiceTotals() {
+    var items = collectInvoiceLineItems();
+    var subtotal = items.reduce(function (s, it) { return s + it.amount; }, 0);
+    var discount = Number(document.getElementById('myinvoice-discount').value) || 0;
+    var rate = Number(document.getElementById('myinvoice-taxrate').value) || 0;
+    var taxable = Math.max(0, subtotal - discount);
+    var tax = Math.round(taxable * rate / 100 * 100) / 100;
+    var total = taxable + tax;
+    var fmt = function (n) { return (Math.round(n * 100) / 100).toLocaleString('en-US'); };
+    document.getElementById('myinvoice-totals').innerHTML =
+      '<div class="d-flex justify-content-between"><span class="text-muted">Subtotal</span><span>' + fmt(subtotal) + '</span></div>' +
+      '<div class="d-flex justify-content-between"><span class="text-muted">Discount</span><span>' + fmt(discount) + '</span></div>' +
+      '<div class="d-flex justify-content-between"><span class="text-muted">Tax</span><span>' + fmt(tax) + '</span></div>' +
+      '<div class="d-flex justify-content-between fw-bold"><span>Total</span><span>' + fmt(total) + '</span></div>';
+  }
+
+  function resetInvoiceForm() {
+    document.getElementById('myinvoice-form').reset();
+    document.getElementById('myinvoice-id').value = '';
+    document.getElementById('myinvoice-return-banner').innerHTML = '';
+    document.getElementById('myinvoice-invoicedate').value = new Date().toISOString().slice(0, 10);
+    document.getElementById('myinvoice-discount').value = '0';
+    document.getElementById('myinvoice-taxrate').value = '0';
+    document.getElementById('myinvoice-tag').value = '';
+    document.getElementById('myinvoice-lineitems-body').innerHTML = '';
+    addInvoiceLineRow();
+    recalcInvoiceTotals();
+  }
+
+  function openAddInvoice() {
+    resetInvoiceForm();
+    document.getElementById('myInvoiceModalLabel').textContent = 'New Invoice';
+    document.getElementById('myinvoice-save-btn').textContent = 'Generate & Submit';
+    invoiceModal.show();
+  }
+
+  function openResubmitInvoice(i) {
+    resetInvoiceForm();
+    document.getElementById('myinvoice-id').value = i.InvoiceID;
+    document.getElementById('myinvoice-return-banner').innerHTML = '<div class="alert alert-warning small">Returned for correction: ' + escapeHtml(i.RejectionReason || '') + '</div>';
+    document.getElementById('myinvoice-invoicenumber').value = i.InvoiceNumber || '';
+    document.getElementById('myinvoice-invoicedate').value = i.InvoiceDate;
+    document.getElementById('myinvoice-category').value = i.ExpenseCategory;
+    document.getElementById('myinvoice-projectid').value = i.ProjectID || '';
+    document.getElementById('myinvoice-accountid').value = i.AccountID;
+    document.getElementById('myinvoice-paymentmethod').value = i.PaymentMethod || '';
+    document.getElementById('myinvoice-notes').value = i.Notes || '';
+    document.getElementById('myinvoice-discount').value = i.Discount || '0';
+    document.getElementById('myinvoice-taxrate').value = i.TaxRate || '0';
+    document.getElementById('myinvoice-tag').value = i.InvoiceTag || '';
+
+    var items = [];
+    try { items = JSON.parse(i.LineItemsJSON || '[]'); } catch (e) { items = []; }
+    document.getElementById('myinvoice-lineitems-body').innerHTML = '';
+    if (!items.length) items = [{}];
+    items.forEach(function (it) { addInvoiceLineRow(it); });
+    recalcInvoiceTotals();
+
+    document.getElementById('myInvoiceModalLabel').textContent = 'Edit & Resubmit Invoice';
+    document.getElementById('myinvoice-save-btn').textContent = 'Regenerate & Resubmit';
+    viewModal.hide();
+    invoiceModal.show();
+  }
+
+  function handleSaveInvoice(e) {
+    e.preventDefault();
+    var lineItems = collectInvoiceLineItems();
+    if (!lineItems.length) { showToast('Add at least one line item with an amount.', 'danger'); return; }
+
+    var id = document.getElementById('myinvoice-id').value;
+    var accountId = document.getElementById('myinvoice-accountid').value;
+    var account = accountOptionsCache.filter(function (a) { return a.id === accountId; })[0];
+    var data = {
+      InvoiceNumber: document.getElementById('myinvoice-invoicenumber').value.trim(),
+      InvoiceDate: document.getElementById('myinvoice-invoicedate').value,
+      ExpenseCategory: document.getElementById('myinvoice-category').value,
+      ProjectID: document.getElementById('myinvoice-projectid').value,
+      AccountID: accountId,
+      Currency: account ? account.currency : '',
+      PaymentMethod: document.getElementById('myinvoice-paymentmethod').value,
+      Notes: document.getElementById('myinvoice-notes').value.trim(),
+      LineItems: lineItems,
+      Discount: document.getElementById('myinvoice-discount').value,
+      TaxRate: document.getElementById('myinvoice-taxrate').value,
+      InvoiceTag: document.getElementById('myinvoice-tag').value
+    };
+    var btn = document.getElementById('myinvoice-save-btn');
+    btn.disabled = true;
+    var call = id ? runServer('resubmitInvoice', token(), id, data) : runServer('createInvoice', token(), data);
+    call.then(function (res) {
+      btn.disabled = false;
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      invoiceModal.hide();
+      showToast(id ? 'Invoice resubmitted.' : 'Invoice submitted.', 'success');
+      // Immediately open the generated branded invoice PDF so they can view/print/save it.
+      if (res.data && res.data.InvoiceDocumentID) viewFinancialDocument(res.data.InvoiceDocumentID);
+      fetchInvoices();
+    }).catch(function (err) { btn.disabled = false; showToast(err.message, 'danger'); });
+  }
+
+  // ---------- View modal (shared) ----------
+  function fieldsFor(kind) { return kind === 'expense' ? EXPENSE_FIELDS : (kind === 'invoice' ? INVOICE_FIELDS : REIMBURSEMENT_FIELDS); }
+  function docFieldFor(kind) { return kind === 'invoice' ? 'InvoiceDocumentID' : 'ReceiptDocumentID'; }
+
+  function openView(kind, id) {
+    var r = recordCache[kind + ':' + id];
+    if (!r) return;
+
+    document.getElementById('myFinanceRecordViewTitle').textContent =
+      kind === 'expense' ? 'Expense Details' : (kind === 'invoice' ? 'Invoice Details' : 'Reimbursement Details');
+
+    var banner = document.getElementById('myfinancerecord-view-reason-banner');
+    if (r.Status === 'Rejected' || r.Status === 'Returned' || r.Status === 'Cancelled') {
+      var label = r.Status === 'Rejected' ? 'Rejected' : (r.Status === 'Returned' ? 'Returned for correction' : 'Cancelled');
+      banner.innerHTML = '<div class="alert alert-warning small mb-3"><strong>' + label + ':</strong> ' + escapeHtml(r.RejectionReason || '') + '</div>';
+    } else {
+      banner.innerHTML = '';
+    }
+
+    var amountRows;
+    if (kind === 'reimbursement') {
+      amountRows = '<div class="bendetail-row"><span class="k">Requested</span><span class="v">' + formatCurrencyIn(r.Amount, r.Currency) + '</span></div>' +
+        (r.ApprovedAmount !== '' && r.ApprovedAmount !== undefined ? '<div class="bendetail-row"><span class="k">Approved</span><span class="v fw-bold">' + formatCurrencyIn(r.ApprovedAmount, r.Currency) + '</span></div>' : '');
+    } else {
+      amountRows = '<div class="bendetail-row"><span class="k">Amount</span><span class="v">' + formatCurrencyIn(r.Amount, r.Currency) + '</span></div>' +
+        '<div class="bendetail-row"><span class="k">Tax</span><span class="v">' + formatCurrencyIn(r.TaxAmount, r.Currency) + '</span></div>' +
+        '<div class="bendetail-row"><span class="k">Total</span><span class="v fw-bold">' + formatCurrencyIn(r.TotalAmount, r.Currency) + '</span></div>';
+    }
+
+    var docId = r[docFieldFor(kind)];
+    document.getElementById('myfinancerecord-view-fields').innerHTML = fieldsFor(kind).map(function (f) {
+      var val = (f[0] === 'ApprovalDate' || f[0] === 'DateSubmitted') ? formatDateDisplay(String(r[f[0]] || '').slice(0, 10)) : r[f[0]];
+      if (!val) return '';
+      return '<div class="bendetail-row"><span class="k">' + f[1] + '</span><span class="v">' + escapeHtml(String(val)) + '</span></div>';
+    }).join('') + amountRows +
+      (docId ? '<div class="bendetail-row"><span class="k">Document</span><span class="v"><a href="#" onclick="MyExpenses.viewDocument(\'' + docId + '\'); return false;"><i class="bi bi-paperclip"></i> View</a></span></div>' : '');
+
+    var actions = '';
+    if (r.Status === 'Returned') {
+      actions += '<button class="btn btn-primary" onclick="MyExpenses.openResubmit(\'' + kind + '\', \'' + id + '\')">Edit &amp; Resubmit</button>';
+    }
+    if (r.Status === 'Submitted' || r.Status === 'Under Review') {
+      actions += '<button class="btn btn-outline-danger" onclick="MyExpenses.promptCancel(\'' + kind + '\', \'' + id + '\')">Cancel</button>';
+    }
+    actions += '<button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>';
+    document.getElementById('myfinancerecord-view-actions').innerHTML = actions;
+
+    viewModal.show();
+  }
+
+  // ---------- Cancel (shared) ----------
+  function cancelFnFor(kind) {
+    if (kind === 'expense') return 'cancelExpense';
+    if (kind === 'invoice') return 'cancelInvoice';
+    return 'cancelReimbursement';
+  }
+
+  function handleConfirmCancel() {
+    if (!pendingCancel) return;
+    var reason = document.getElementById('myfinancerecord-cancel-reason').value.trim();
+    if (!reason) { showToast('A reason is required.', 'danger'); return; }
+    runServer(cancelFnFor(pendingCancel.kind), token(), pendingCancel.id, reason).then(function (res) {
+      cancelModal.hide();
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Cancelled.', 'success');
+      viewModal.hide();
+      fetchExpenses();
+      fetchReimbursements();
+      fetchInvoices();
+    });
+  }
+
+  window.MyExpenses = {
+    openView: openView,
+    openResubmit: function (kind, id) {
+      var r = recordCache[kind + ':' + id];
+      if (!r) return;
+      if (kind === 'expense') openResubmitExpense(r);
+      else if (kind === 'invoice') openResubmitInvoice(r);
+      else openResubmitReimbursement(r);
+    },
+    promptCancel: function (kind, id) {
+      pendingCancel = { kind: kind, id: id };
+      document.getElementById('myfinancerecord-cancel-reason').value = '';
+      cancelModal.show();
+    },
+    viewDocument: function (documentId) { viewFinancialDocument(documentId); }
+  };
+})();
+</script>

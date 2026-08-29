@@ -1,0 +1,207 @@
+<script>
+(function () {
+  var UNREAD_POLL_MS = 20000;   // topnav badge — mirrors NotificationsJS.html's cadence
+  var MESSAGE_POLL_MS = 5000;   // brisker, but only while a conversation is actually open
+  var unreadPollTimer = null;
+  var messagePollTimer = null;
+  var threadsCache = [];
+  var contactsCache = [];
+  var currentThreadId = null;
+  var currentOtherEmail = null;
+
+  /** Called once from CommonJS.html's applyIdentity() — app-shell-level, same as initNotifications/initDeviceRequests. */
+  function initChat() {
+    var bell = document.getElementById('chat-bell');
+    if (!bell) return; // standalone pages (Login.html etc.) have no Topnav
+
+    var panel = document.getElementById('chatPanel');
+    panel.addEventListener('show.bs.offcanvas', function () {
+      showListView();
+    });
+    panel.addEventListener('hidden.bs.offcanvas', stopMessagePolling);
+
+    document.getElementById('chat-contact-search').addEventListener('input', debounce(function (e) {
+      renderContactsAndThreads(e.target.value.trim().toLowerCase());
+    }, 200));
+
+    document.getElementById('btn-chat-back').addEventListener('click', showListView);
+    document.getElementById('chat-message-form').addEventListener('submit', handleSendMessage);
+
+    fetchUnreadCount();
+    if (unreadPollTimer) clearInterval(unreadPollTimer);
+    unreadPollTimer = setInterval(fetchUnreadCount, UNREAD_POLL_MS);
+  }
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  function fetchUnreadCount() {
+    runServer('getUnreadChatCount', token()).then(function (res) {
+      if (res.success) renderBadge(res.data);
+    });
+  }
+
+  function renderBadge(count) {
+    var badge = document.getElementById('chat-badge');
+    if (!badge) return;
+    if (count > 0) {
+      badge.textContent = count > 9 ? '9+' : String(count);
+      badge.classList.remove('d-none');
+    } else {
+      badge.classList.add('d-none');
+    }
+  }
+
+  function showListView() {
+    stopMessagePolling();
+    currentThreadId = null;
+    currentOtherEmail = null;
+    setViewVisible('chat-list-view', true);
+    setViewVisible('chat-conversation-view', false);
+    loadThreadsAndContacts();
+  }
+
+  function setViewVisible(elId, visible) {
+    var el = document.getElementById(elId);
+    el.classList.toggle('d-none', !visible);
+    el.classList.toggle('d-flex', visible);
+  }
+
+  function loadThreadsAndContacts() {
+    // Sequential, not Promise.all — Apps Script queues concurrent doPost
+    // executions against the same deployment rather than truly running
+    // them in parallel (established elsewhere in this codebase).
+    runServer('getMyThreads', token()).then(function (res) {
+      threadsCache = res.success ? res.data : [];
+      return runServer('getMyContacts', token());
+    }).then(function (res) {
+      contactsCache = res.success ? res.data : [];
+      renderContactsAndThreads('');
+    });
+  }
+
+  function renderContactsAndThreads(filterText) {
+    var threadsList = document.getElementById('chat-threads-list');
+    var contactsList = document.getElementById('chat-contacts-list');
+
+    var filteredThreads = threadsCache.filter(function (t) {
+      return !filterText || t.otherName.toLowerCase().indexOf(filterText) !== -1;
+    });
+    threadsList.innerHTML = filteredThreads.length ? filteredThreads.map(function (t) {
+      return '<div class="px-2 py-2 border-bottom d-flex align-items-start gap-2" style="cursor:pointer" onclick="Chat.openThread(\'' + t.threadId + '\', \'' + escAttr_(t.otherEmail) + '\', \'' + escAttr_(t.otherName) + '\', \'' + escAttr_(roleLabel_(t.otherRole)) + '\')">' +
+        '<div class="flex-grow-1" style="min-width:0;">' +
+          '<div class="d-flex justify-content-between">' +
+            '<span class="' + (t.unread ? 'fw-bold' : 'fw-medium') + ' small">' + escapeHtml(t.otherName) + '</span>' +
+            '<span class="text-muted flex-shrink-0 ms-1" style="font-size:0.68rem;">' + chatRelativeTime_(t.lastMessageAt) + '</span>' +
+          '</div>' +
+          '<div class="text-muted small text-truncate">' + escapeHtml(t.lastMessagePreview || '') + '</div>' +
+        '</div>' +
+        (t.unread ? '<span class="badge bg-primary rounded-pill flex-shrink-0">' + t.unread + '</span>' : '') +
+      '</div>';
+    }).join('') : '<p class="text-muted text-center small py-3">No conversations yet.</p>';
+
+    var threadEmails = {};
+    threadsCache.forEach(function (t) { threadEmails[t.otherEmail] = true; });
+    var filteredContacts = contactsCache.filter(function (c) {
+      return !threadEmails[c.email] && (!filterText || c.name.toLowerCase().indexOf(filterText) !== -1);
+    });
+    contactsList.innerHTML = filteredContacts.map(function (c) {
+      return '<div class="px-2 py-2 border-bottom d-flex align-items-center gap-2" style="cursor:pointer" onclick="Chat.openThread(\'\', \'' + escAttr_(c.email) + '\', \'' + escAttr_(c.name) + '\', \'' + escAttr_(roleLabel_(c.role, c.accessLevel)) + '\')">' +
+        '<i class="bi bi-person-circle text-muted"></i>' +
+        '<span class="small">' + escapeHtml(c.name) + '</span>' +
+      '</div>';
+    }).join('');
+  }
+
+  var ACCESS_LEVEL_LABELS_ = { SuperAdmin: 'Super Admin', CountryDirector: 'Country Director', MELead: 'M&E Lead', Accountant: 'Accountant' };
+  function roleLabel_(role, accessLevel) {
+    if (role === 'HubManager') return 'Hub Manager';
+    return (accessLevel && ACCESS_LEVEL_LABELS_[accessLevel]) || 'Admin';
+  }
+
+  window.Chat = {
+    openThread: function (threadId, otherEmail, otherName, otherRoleLabel) {
+      currentThreadId = threadId || null;
+      currentOtherEmail = otherEmail;
+      document.getElementById('chat-conversation-name').textContent = otherName;
+      document.getElementById('chat-conversation-role').textContent = otherRoleLabel || '';
+      setViewVisible('chat-list-view', false);
+      setViewVisible('chat-conversation-view', true);
+      document.getElementById('chat-message-input').value = '';
+      document.getElementById('chat-message-input').focus();
+
+      if (currentThreadId) {
+        fetchMessages();
+        startMessagePolling();
+      } else {
+        document.getElementById('chat-messages-list').innerHTML = '<p class="text-muted text-center small py-3">Say hello — this starts a new conversation.</p>';
+      }
+    }
+  };
+
+  function fetchMessages() {
+    if (!currentThreadId) return;
+    runServer('getThreadMessages', token(), currentThreadId).then(function (res) {
+      if (!res.success) return;
+      renderMessages(res.data);
+      runServer('markChatThreadRead', token(), currentThreadId).then(fetchUnreadCount);
+    });
+  }
+
+  function renderMessages(messages) {
+    var el = document.getElementById('chat-messages-list');
+    el.innerHTML = messages.length ? messages.map(function (m) {
+      return '<div class="d-flex ' + (m.mine ? 'justify-content-end' : 'justify-content-start') + ' mb-2">' +
+        '<div class="' + (m.mine ? 'bg-primary text-white' : 'bg-light') + '" style="max-width:80%;padding:.4rem .65rem;border-radius:.75rem;font-size:.82rem;">' +
+          '<div style="white-space:pre-wrap;word-break:break-word;">' + escapeHtml(m.body) + '</div>' +
+          '<div class="' + (m.mine ? 'text-white-50' : 'text-muted') + '" style="font-size:0.65rem;">' + chatRelativeTime_(m.dateCreated) + '</div>' +
+        '</div>' +
+      '</div>';
+    }).join('') : '<p class="text-muted text-center small py-3">No messages yet — say hello.</p>';
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function startMessagePolling() {
+    stopMessagePolling();
+    messagePollTimer = setInterval(fetchMessages, MESSAGE_POLL_MS);
+  }
+  function stopMessagePolling() {
+    if (messagePollTimer) { clearInterval(messagePollTimer); messagePollTimer = null; }
+  }
+
+  function handleSendMessage(e) {
+    e.preventDefault();
+    var input = document.getElementById('chat-message-input');
+    var body = input.value.trim();
+    if (!body || !currentOtherEmail) return;
+    input.value = '';
+
+    runServer('sendChatMessage', token(), currentOtherEmail, body).then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); input.value = body; return; }
+      if (!currentThreadId) {
+        currentThreadId = res.data.threadId;
+        startMessagePolling();
+      }
+      fetchMessages();
+    }).catch(function (err) {
+      showToast(err.message, 'danger');
+      input.value = body;
+    });
+  }
+
+  function chatRelativeTime_(isoLike) {
+    if (!isoLike) return '';
+    var then = new Date(isoLike);
+    if (isNaN(then.getTime())) return '';
+    var diffMin = Math.round((Date.now() - then.getTime()) / 60000);
+    if (diffMin < 1) return 'just now';
+    if (diffMin < 60) return diffMin + 'm ago';
+    var diffHr = Math.round(diffMin / 60);
+    if (diffHr < 24) return diffHr + 'h ago';
+    return Math.round(diffHr / 24) + 'd ago';
+  }
+
+  function escAttr_(s) { return escapeHtml(String(s || '')).replace(/'/g, "\\'"); }
+
+  window.initChat = initChat;
+})();
+</script>

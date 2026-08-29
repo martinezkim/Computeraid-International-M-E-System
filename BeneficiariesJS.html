@@ -1,0 +1,290 @@
+<script>
+(function () {
+  var state = { search: '', hubId: '', countryId: '', sortBy: 'RegistrationDate', sortDir: 'desc', page: 1, pageSize: 10 };
+  var currentRecords = [];
+  var detailModal, deleteModal;
+  var pendingDeleteId = null;
+
+  var EXPORT_COLUMNS = [
+    { key: 'BeneficiaryID', label: 'Beneficiary ID' },
+    { key: 'FirstName', label: 'First Name' },
+    { key: 'SurnameInitial', label: 'Surname Initial' },
+    { key: 'AgeGroup', label: 'Age Group' },
+    { key: 'Gender', label: 'Gender' },
+    { key: 'Country', label: 'Country' },
+    { key: 'Region', label: 'Region/County' },
+    { key: 'Community', label: 'Location' },
+    { key: 'UserCategory', label: 'User Category' },
+    { key: 'DistanceFromHub', label: 'Distance from Hub' },
+    { key: 'FirstTimeVisitor', label: 'First-Time Visitor' },
+    { key: 'HomeHubName', label: 'Home Hub' },
+    { key: 'RegistrationDate', label: 'Registration Date' }
+  ];
+
+  // Fields shown on the detail modal — [record key, label]. AgeGroup/
+  // SurnameInitial deliberately excluded here since Age/LastName (below)
+  // are the fuller, more useful values for this operational view.
+  // ConsentStatus removed — no longer collected on the registration form
+  // (historical records still have it in the sheet, just not surfaced here).
+  var DETAIL_FIELDS = [
+    ['Age', 'Age'], ['Gender', 'Gender'], ['Country', 'Country'], ['Region', 'Region/County'],
+    ['Community', 'Location'], ['EducationLevel', 'Education Level'], ['Occupation', 'Occupation'],
+    ['UserCategory', 'User Category'], ['Phone', 'Phone'], ['Email', 'Email'],
+    ['DisabilityInfo', 'Disability Info'], ['DistanceFromHub', 'Distance from Hub'],
+    ['FirstTimeVisitor', 'First-Time Visitor'],
+    ['HomeHubName', 'Home Hub'], ['RegistrationDate', 'Registered']
+  ];
+
+  // Distance is captured as a fixed km-labeled bucket, not a raw number —
+  // this "calculator" is a label remap for display, not real unit math.
+  var DISTANCE_MILES_LABELS = {
+    'Less than a kilometer': 'Less than 0.62 miles',
+    '2 kilometers': '1.24 miles',
+    '5 kilometers': '3.11 miles',
+    'More than 5 kilometers': 'More than 3.11 miles'
+  };
+  var distanceUnit = 'km';
+  var currentDetailBeneficiary = null;
+
+  window.BeneficiariesToggleDistanceUnit = function () {
+    distanceUnit = distanceUnit === 'km' ? 'mi' : 'km';
+    if (currentDetailBeneficiary) renderDetailFields_(currentDetailBeneficiary);
+  };
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'beneficiaries') return;
+    if (!window.MNE_CURRENT_USER || window.MNE_CURRENT_USER.role !== 'Admin') return;
+    initBeneficiariesPage();
+  });
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  function initBeneficiariesPage() {
+    state = { search: '', hubId: '', sortBy: 'RegistrationDate', sortDir: 'desc', page: 1, pageSize: 10 };
+    detailModal = new bootstrap.Modal(document.getElementById('beneficiaryDetailModal'));
+    deleteModal = new bootstrap.Modal(document.getElementById('beneficiaryDeleteModal'));
+
+    document.getElementById('beneficiaries-search').addEventListener('input', debounce(function (e) {
+      state.search = e.target.value;
+      state.page = 1;
+      fetchBeneficiaries();
+    }, 350));
+
+    document.getElementById('beneficiaries-hub-filter').addEventListener('change', function (e) {
+      state.hubId = e.target.value;
+      state.page = 1;
+      fetchBeneficiaries();
+    });
+
+    document.getElementById('beneficiaries-country-filter').addEventListener('change', function (e) {
+      state.countryId = e.target.value;
+      state.page = 1;
+      fetchBeneficiaries();
+    });
+
+    document.getElementById('beneficiaries-page-size').addEventListener('change', function (e) {
+      state.pageSize = parseInt(e.target.value, 10);
+      state.page = 1;
+      fetchBeneficiaries();
+    });
+
+    document.querySelectorAll('[data-format]').forEach(function (link) {
+      link.addEventListener('click', function (e) {
+        e.preventDefault();
+        runExport(link.dataset.format);
+      });
+    });
+
+    document.getElementById('btn-bendetail-delete').addEventListener('click', function () {
+      detailModal.hide();
+      openDeleteConfirm(pendingDeleteId);
+    });
+    document.getElementById('confirm-delete-beneficiary').addEventListener('click', handleConfirmDelete);
+
+    document.getElementById('beneficiaries-bands-year').addEventListener('change', fetchRegistrationBands);
+
+    Promise.all([loadHubOptions(), loadCountryOptions()]).then(loadProjectYearOptions).then(fetchBeneficiaries);
+  }
+
+  function loadHubOptions() {
+    return runServer('getHubOptions', token()).then(function (res) {
+      if (!res.success) return;
+      var opts = res.data.map(function (h) { return '<option value="' + h.id + '">' + escapeHtml(h.name) + '</option>'; }).join('');
+      document.getElementById('beneficiaries-hub-filter').innerHTML = '<option value="">All Hubs</option>' + opts;
+    });
+  }
+
+  function loadCountryOptions() {
+    return runServer('getCountryOptions', token()).then(function (res) {
+      if (!res.success) return;
+      var opts = res.data.map(function (c) { return '<option value="' + c.id + '">' + escapeHtml(c.name) + '</option>'; }).join('');
+      document.getElementById('beneficiaries-country-filter').innerHTML = '<option value="">All Countries</option>' + opts;
+    });
+  }
+
+  // ---------- Registrations by Quarter ----------
+  function loadProjectYearOptions() {
+    return runServer('getProjectYearOptions', token()).then(function (res) {
+      var select = document.getElementById('beneficiaries-bands-year');
+      if (!res.success || !res.data.length) {
+        select.innerHTML = '<option value="">No project years set up yet</option>';
+        return;
+      }
+      select.innerHTML = res.data.map(function (y) { return '<option value="' + escapeHtml(y) + '">' + escapeHtml(y) + '</option>'; }).join('');
+      fetchRegistrationBands();
+    });
+  }
+
+  function fetchRegistrationBands() {
+    var year = document.getElementById('beneficiaries-bands-year').value;
+    var grid = document.getElementById('beneficiaries-bands-grid');
+    if (!year) { grid.innerHTML = '<div class="text-muted small">No project years set up yet.</div>'; return; }
+    grid.innerHTML = '<div class="text-muted small">Loading…</div>';
+
+    runServer('getBeneficiaryRegistrationBands', token(), year, state.hubId || null).then(function (res) {
+      if (!res.success) { grid.innerHTML = '<div class="text-danger small">' + escapeHtml(res.message) + '</div>'; return; }
+      if (!res.data.length) { grid.innerHTML = '<div class="text-muted small">No quarters set up for this project year yet.</div>'; return; }
+      grid.innerHTML = res.data.map(function (band) {
+        return '<div class="mini-stat-card">' +
+          '<div class="mini-stat-value">' + band.count + '</div>' +
+          '<div class="mini-stat-label">' + escapeHtml(band.quarterLabel) + '</div>' +
+          '<div class="text-muted small">' + escapeHtml(band.dateRangeLabel) + '</div>' +
+        '</div>';
+      }).join('');
+    });
+  }
+
+  function fetchBeneficiaries() {
+    var tbody = document.getElementById('beneficiaries-table-body');
+    tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">Loading…</td></tr>';
+
+    runServer('getAllBeneficiaries', token(), state).then(function (res) {
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="7" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      currentRecords = res.data.records;
+      renderTable(currentRecords);
+      renderSummary(res.data.pagination);
+      renderPagination('beneficiaries-pagination', res.data.pagination, function (p) {
+        state.page = p;
+        fetchBeneficiaries();
+      });
+    });
+  }
+
+  function renderTable(records) {
+    var tbody = document.getElementById('beneficiaries-table-body');
+    if (!records.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">No beneficiaries found.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = records.map(function (b) {
+      var thumb = b.PhotoUrl
+        ? '<img class="beneficiary-thumb" src="' + escapeHtml(b.PhotoUrl) + '" alt="">'
+        : '<span class="beneficiary-thumb-placeholder"><i class="bi bi-person-fill"></i></span>';
+      return '<tr class="beneficiary-row" data-id="' + escapeHtml(b.BeneficiaryID) + '">' +
+        '<td class="text-muted">' + b.BeneficiaryID + '</td>' +
+        '<td class="fw-medium"><div class="beneficiary-thumb-wrap">' + thumb + '<span>' + escapeHtml(b.FirstName) + ' ' + escapeHtml(b.SurnameInitial) + '.</span></div></td>' +
+        '<td>' + escapeHtml(b.AgeGroup) + '</td>' +
+        '<td>' + escapeHtml(b.Gender) + '</td>' +
+        '<td>' + escapeHtml(b.Community || '') + '</td>' +
+        '<td>' + escapeHtml(b.HomeHubName || '') + '</td>' +
+        '<td>' + escapeHtml(b.RegistrationDate) + '</td>' +
+      '</tr>';
+    }).join('');
+
+    tbody.querySelectorAll('tr.beneficiary-row').forEach(function (row) {
+      row.addEventListener('click', function () { openDetail(row.dataset.id); });
+    });
+  }
+
+  function renderSummary(p) {
+    var el = document.getElementById('beneficiaries-summary');
+    var start = (p.page - 1) * p.pageSize + 1;
+    var end = Math.min(p.page * p.pageSize, p.totalRecords);
+    el.textContent = p.totalRecords === 0 ? 'No records' : ('Showing ' + start + '–' + end + ' of ' + p.totalRecords);
+  }
+
+  function runExport(format) {
+    runServer('getAllBeneficiaries', token(), { search: state.search, hubId: state.hubId, sortBy: state.sortBy, sortDir: state.sortDir, page: 1, pageSize: 100000 }).then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      exportRecordsToFile(res.data.records, EXPORT_COLUMNS, format, 'Beneficiaries_' + new Date().toISOString().slice(0, 10));
+    });
+  }
+
+  // ---------- Detail modal ----------
+  function openDetail(id) {
+    var b = currentRecords.filter(function (r) { return r.BeneficiaryID === id; })[0];
+    if (!b) return;
+    pendingDeleteId = id;
+
+    var img = document.getElementById('bendetail-photo-img');
+    var placeholder = document.getElementById('bendetail-photo-placeholder');
+    if (b.PhotoUrl) {
+      img.src = b.PhotoUrl; img.style.display = 'inline-flex'; placeholder.style.display = 'none';
+    } else {
+      img.style.display = 'none'; placeholder.style.display = 'inline-flex';
+    }
+
+    document.getElementById('bendetail-name').textContent = (b.FirstName || '') + ' ' + (b.LastName || '');
+    document.getElementById('bendetail-id').textContent = b.BeneficiaryID;
+
+    currentDetailBeneficiary = b;
+    renderDetailFields_(b);
+
+    detailModal.show();
+  }
+
+  function renderDetailFields_(b) {
+    document.getElementById('bendetail-fields').innerHTML = DETAIL_FIELDS.map(function (f) {
+      var val = b[f[0]];
+      if (!val) return '';
+      if (f[0] === 'DistanceFromHub') {
+        var shown = distanceUnit === 'mi' ? (DISTANCE_MILES_LABELS[val] || val) : val;
+        return '<div class="bendetail-row"><span class="k">' + f[1] + '</span><span class="v">' + escapeHtml(shown) +
+          ' <a href="#" onclick="BeneficiariesToggleDistanceUnit(); return false;" class="small">(show in ' +
+          (distanceUnit === 'mi' ? 'km' : 'miles') + ')</a></span></div>';
+      }
+      return '<div class="bendetail-row"><span class="k">' + f[1] + '</span><span class="v">' + escapeHtml(val) + '</span></div>';
+    }).join('');
+  }
+
+  // ---------- Delete ----------
+  function openDeleteConfirm(id) {
+    var b = currentRecords.filter(function (r) { return r.BeneficiaryID === id; })[0];
+    if (!b) return;
+    pendingDeleteId = id;
+    document.getElementById('bendelete-name').textContent = (b.FirstName || '') + ' ' + (b.SurnameInitial || '') + '.';
+
+    var box = document.getElementById('bendelete-dependents');
+    box.classList.add('d-none');
+    box.innerHTML = '';
+    runServer('getBeneficiaryDependentCounts', token(), id).then(function (res) {
+      if (!res.success) return;
+      var d = res.data;
+      var total = d.visits + d.sessions + d.feedback;
+      if (total > 0) {
+        box.classList.remove('d-none');
+        box.innerHTML = 'This beneficiary has <strong>' + d.visits + ' visit(s)</strong>, <strong>' + d.sessions + ' computer session(s)</strong>, and <strong>' + d.feedback + ' feedback entr' + (d.feedback === 1 ? 'y' : 'ies') + '</strong> on record. Deleting them will not remove those, but they\'ll no longer show a name.';
+      }
+    });
+
+    deleteModal.show();
+  }
+
+  function handleConfirmDelete() {
+    if (!pendingDeleteId) return;
+    var btn = document.getElementById('confirm-delete-beneficiary');
+    btn.disabled = true;
+    runServer('deleteBeneficiary', token(), pendingDeleteId).then(function (res) {
+      btn.disabled = false;
+      deleteModal.hide();
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Beneficiary deleted.', 'success');
+      fetchBeneficiaries();
+    }).catch(function (err) {
+      btn.disabled = false;
+      deleteModal.hide();
+      showToast(err.message, 'danger');
+    });
+  }
+})();
+</script>

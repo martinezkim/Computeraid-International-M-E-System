@@ -1,0 +1,288 @@
+<div class="page-header animate-float-up">
+  <div>
+    <h4>Laptops for Sale</h4>
+    <p id="laptops-hub-label">Loading your hub…</p>
+  </div>
+  <div class="d-flex gap-2">
+    <button class="btn btn-light" id="btn-import-laptops">
+      <i class="bi bi-file-earmark-arrow-up"></i> Import from Spreadsheet
+    </button>
+    <button class="btn btn-primary" id="btn-add-laptop">
+      <i class="bi bi-plus-lg"></i> Add Laptop
+    </button>
+  </div>
+</div>
+
+<div class="pill-tabs animate-float-up">
+  <button type="button" class="pill-tab active" data-status="Current Stock">Current Stock</button>
+  <button type="button" class="pill-tab" data-status="Sold">Sold Laptops</button>
+  <button type="button" class="pill-tab" data-status="Faulty">Faulty Laptops</button>
+</div>
+
+<div class="card-surface animate-float-up">
+  <div class="toolbar mb-2">
+    <div class="search-box">
+      <i class="bi bi-search"></i>
+      <input type="text" class="form-control" id="laptop-search" placeholder="Search by asset ID, inventory ID, serial, manufacturer, model…">
+    </div>
+
+    <select class="form-select w-auto" id="laptop-manufacturer-filter">
+      <option value="">All Manufacturers</option>
+    </select>
+    <select class="form-select w-auto" id="laptop-processor-filter">
+      <option value="">All Processors</option>
+    </select>
+    <select class="form-select w-auto" id="laptop-ram-filter">
+      <option value="">All RAM</option>
+    </select>
+    <select class="form-select w-auto" id="laptop-storage-filter">
+      <option value="">All Storage</option>
+    </select>
+
+    <select class="form-select w-auto" id="laptop-sort">
+      <option value="DateAdded:desc">Date Added (Newest)</option>
+      <option value="DateAdded:asc">Date Added (Oldest)</option>
+      <option value="SellingPrice:desc">Price (Highest)</option>
+      <option value="SellingPrice:asc">Price (Lowest)</option>
+      <option value="Manufacturer:asc">Manufacturer (A–Z)</option>
+    </select>
+  </div>
+
+  <div class="toolbar mb-3">
+    <input type="number" min="0" step="0.01" class="form-control w-auto" id="laptop-price-min" placeholder="Min price">
+    <input type="number" min="0" step="0.01" class="form-control w-auto" id="laptop-price-max" placeholder="Max price">
+    <input type="date" class="form-control w-auto" id="laptop-date-from" title="Date added from">
+    <input type="date" class="form-control w-auto" id="laptop-date-to" title="Date added to">
+    <select class="form-select w-auto" id="laptop-page-size">
+      <option value="10">10 / page</option>
+      <option value="25">25 / page</option>
+      <option value="50">50 / page</option>
+    </select>
+
+    <div class="form-check form-switch d-flex align-items-center gap-2 ms-auto" style="min-width:auto;">
+      <input class="form-check-input" type="checkbox" role="switch" id="laptop-group-toggle" checked>
+      <label class="form-check-label text-nowrap" for="laptop-group-toggle">Group by model</label>
+    </div>
+
+    <div class="btn-group" role="group" aria-label="View mode">
+      <button type="button" class="btn btn-light active" id="laptop-view-grid" title="Large icons"><i class="bi bi-grid-3x3-gap-fill"></i></button>
+      <button type="button" class="btn btn-light" id="laptop-view-list" title="List"><i class="bi bi-list-ul"></i></button>
+    </div>
+  </div>
+
+  <div class="project-grid" id="laptop-grid">
+    <div class="text-center text-muted py-4" style="grid-column: 1 / -1;">Loading…</div>
+  </div>
+
+  <div class="d-flex justify-content-between align-items-center mt-3">
+    <small class="text-muted" id="laptop-summary"></small>
+    <div id="laptop-pagination"></div>
+  </div>
+</div>
+
+<!-- Add / Edit Laptop Modal -->
+<div class="modal fade" id="laptopModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-content">
+      <form id="laptop-form" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title" id="laptopModalLabel">Add Laptop</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="laptop-id">
+
+          <div class="row g-3">
+            <div class="col-md-4">
+              <label class="form-label">Asset ID <span class="text-muted fw-normal">(optional)</span></label>
+              <input type="text" class="form-control" id="laptop-assetid" placeholder="e.g. barcode/stock tag">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Manufacturer</label>
+              <input type="text" class="form-control" id="laptop-manufacturer" required placeholder="e.g. Dell">
+              <div class="invalid-feedback">Please enter a manufacturer.</div>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Model</label>
+              <input type="text" class="form-control" id="laptop-model" required placeholder="e.g. Latitude 5410">
+              <div class="invalid-feedback">Please enter a model.</div>
+            </div>
+
+            <div class="col-md-4">
+              <label class="form-label">Serial Number</label>
+              <input type="text" class="form-control" id="laptop-serial" required placeholder="e.g. SN-991823">
+              <div class="invalid-feedback">Please enter a serial number.</div>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Processor</label>
+              <input type="text" class="form-control" id="laptop-processor" placeholder="e.g. Intel Core i5-8350U">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">RAM</label>
+              <input type="text" class="form-control" id="laptop-ram" placeholder="e.g. 8GB">
+            </div>
+
+            <div class="col-md-4">
+              <label class="form-label">Storage</label>
+              <input type="text" class="form-control" id="laptop-storage" placeholder="e.g. 256GB SSD">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Screen Size</label>
+              <input type="text" class="form-control" id="laptop-screensize" placeholder="e.g. 14&quot;">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Operating System</label>
+              <input type="text" class="form-control" id="laptop-os" placeholder="e.g. Windows 11 Pro">
+            </div>
+
+            <div class="col-md-4">
+              <label class="form-label">Condition</label>
+              <select class="form-select" id="laptop-condition" required>
+                <option value="">Select condition…</option>
+              </select>
+              <div class="invalid-feedback">Please select a condition.</div>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Selling Price</label>
+              <input type="number" min="0" step="0.01" class="form-control" id="laptop-selling-price" required placeholder="0.00">
+              <div class="invalid-feedback">Please enter a valid selling price.</div>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Date Added</label>
+              <input type="date" class="form-control" id="laptop-date-added" required>
+              <div class="invalid-feedback">Please choose a date.</div>
+            </div>
+
+            <div class="col-md-4">
+              <label class="form-label">Status</label>
+              <select class="form-select" id="laptop-status" required>
+                <option value="">Select status…</option>
+              </select>
+              <div class="invalid-feedback">Please select a status.</div>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Order Number</label>
+              <input type="text" class="form-control" id="laptop-order-number" placeholder="e.g. ORD0001">
+              <div class="form-text">Groups laptops added in the same stock list/import.</div>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Purchase Order # <span class="text-muted fw-normal">(optional)</span></label>
+              <input type="text" class="form-control" id="laptop-po-number">
+            </div>
+
+            <div class="col-12" id="laptop-sold-fields" style="display:none;">
+              <hr>
+              <div class="row g-3">
+                <div class="col-md-4">
+                  <label class="form-label">Buyer Name</label>
+                  <input type="text" class="form-control" id="laptop-buyer-name">
+                  <div class="invalid-feedback">Buyer name is required for a sold laptop.</div>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label">Sale Date</label>
+                  <input type="date" class="form-control" id="laptop-sale-date">
+                  <div class="invalid-feedback">Sale date is required for a sold laptop.</div>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label">Sale Price</label>
+                  <input type="number" min="0" step="0.01" class="form-control" id="laptop-sale-price">
+                  <div class="invalid-feedback">Sale price is required for a sold laptop.</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="col-12">
+              <label class="form-label">Notes <span class="text-muted fw-normal">(optional)</span></label>
+              <textarea class="form-control" id="laptop-notes" rows="2"></textarea>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="laptop-save-btn">Save Laptop</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div class="modal fade" id="laptopDeleteModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Delete Laptop</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        Are you sure you want to delete <strong id="delete-laptop-name"></strong>? This cannot be undone.
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-danger" id="confirm-delete-laptop">Delete</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Import from Spreadsheet Modal -->
+<div class="modal fade" id="laptopImportModal" tabindex="-1" data-bs-backdrop="static">
+  <div class="modal-dialog modal-dialog-centered modal-xl">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Import Laptop Inventory from Spreadsheet</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+
+        <div id="import-step-upload">
+          <p class="text-muted">Upload a .csv or .xlsx file. Recommended columns: <code>purchaseordernum, salesordernum, Barcode, customerid, stockid, categoryname, ManName, modelname, Blancco Processor, RAM, HDD, CD?, MEMORYTOTAL, MEMORYBANKS, SerialNumber, collectionid</code>. Column headers are matched automatically — extra or missing columns are fine.</p>
+          <div class="d-flex align-items-center gap-3 flex-wrap">
+            <input type="file" class="form-control w-auto" id="laptop-import-file" accept=".csv,.xlsx,.xls">
+            <button type="button" class="btn btn-light" id="btn-download-template">
+              <i class="bi bi-download"></i> Download Template
+            </button>
+          </div>
+          <div id="import-parse-status" class="mt-3"></div>
+        </div>
+
+        <div id="import-step-preview" style="display:none;">
+          <div class="row g-3 mb-3">
+            <div class="col-md-4">
+              <label class="form-label">Order Number for this stock list</label>
+              <input type="text" class="form-control" id="import-order-number">
+              <div class="form-text">Every laptop imported in this batch will share this order number.</div>
+            </div>
+            <div class="col-md-8 d-flex align-items-end">
+              <div id="import-counts" class="fw-semibold"></div>
+            </div>
+          </div>
+
+          <div id="import-errors-section" style="display:none;">
+            <h6 class="text-danger"><i class="bi bi-exclamation-triangle-fill"></i> Rows that can't be imported</h6>
+            <div class="import-preview-table mb-3">
+              <table class="table table-sm mb-0">
+                <thead><tr><th>Row</th><th>Serial #</th><th>Manufacturer / Model</th><th>Reason</th></tr></thead>
+                <tbody id="import-errors-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <h6><i class="bi bi-check-circle-fill text-success"></i> Ready to import</h6>
+          <div class="import-preview-table">
+            <table class="table table-sm mb-0">
+              <thead><tr><th>Asset ID</th><th>Manufacturer</th><th>Model</th><th>Serial #</th><th>Processor</th><th>RAM</th><th>Storage</th></tr></thead>
+              <tbody id="import-valid-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" id="btn-import-start-over" style="display:none;">Start Over</button>
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="btn-confirm-import" style="display:none;">Confirm Import</button>
+      </div>
+    </div>
+  </div>
+</div>

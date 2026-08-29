@@ -1,0 +1,320 @@
+<script>
+(function () {
+  var CATEGORY_ICONS = {
+    'Desktop Computers': 'bi-pc-display',
+    'Laptops': 'bi-laptop',
+    'Printers': 'bi-printer',
+    'Projectors': 'bi-projector',
+    'Routers / Networking Equipment': 'bi-router',
+    'Solar Equipment': 'bi-brightness-high-fill',
+    'VR Headsets': 'bi-eyeglasses',
+    'Tablets': 'bi-tablet',
+    'UPS / Power Backup': 'bi-battery-charging',
+    'Other Devices': 'bi-box-seam'
+  };
+
+  var CONDITION_BADGE = {
+    'New': 'badge-condition-new',
+    'Refurbished': 'badge-condition-refurbished'
+  };
+
+  var STATUS_BADGE = {
+    'In Use': 'badge-status-inuse',
+    'In Storage': 'badge-status-instorage',
+    'Under Repair': 'badge-status-underrepair',
+    'Faulty': 'badge-status-faulty',
+    'Decommissioned': 'badge-status-decommissioned'
+  };
+
+  var inventoryModal, deleteModal, pendingDeleteId;
+  var state = { search: '', sortBy: 'DateAcquired', sortDir: 'desc', page: 1, pageSize: 10, category: '', status: '', dateFrom: '', dateTo: '' };
+  var currentRecords = [];
+  var formOptionsCache = null;
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'inventoryhub') return;
+    if (!window.MNE_CURRENT_USER || window.MNE_CURRENT_USER.role !== 'HubManager') return;
+    initInventoryPage();
+  });
+
+  function initInventoryPage() {
+    state = { search: '', sortBy: 'DateAcquired', sortDir: 'desc', page: 1, pageSize: 10, category: '', status: '', dateFrom: '', dateTo: '' };
+    inventoryModal = new bootstrap.Modal(document.getElementById('inventoryModal'));
+    deleteModal = new bootstrap.Modal(document.getElementById('inventoryDeleteModal'));
+
+    var hubLabel = document.getElementById('inventory-hub-label');
+    var hubId = window.MNE_CURRENT_USER.hubId;
+    runServer('getHubById', localStorage.getItem(MNE_SESSION_KEY), hubId).then(function (res) {
+      hubLabel.textContent = res.success ? ('Hub: ' + res.data.name) : 'Your hub';
+    }).catch(function () {
+      hubLabel.textContent = 'Your hub';
+    });
+
+    document.getElementById('btn-add-inventory').addEventListener('click', openAddModal);
+    document.getElementById('inventory-form').addEventListener('submit', handleSave);
+    document.getElementById('confirm-delete-inventory').addEventListener('click', handleConfirmDelete);
+
+    document.getElementById('inventory-search').addEventListener('input', debounce(function (e) {
+      state.search = e.target.value;
+      state.page = 1;
+      fetchInventory();
+    }, 350));
+
+    document.getElementById('inventory-category-filter').addEventListener('change', function (e) {
+      state.category = e.target.value;
+      state.page = 1;
+      fetchInventory();
+    });
+
+    document.getElementById('inventory-status-filter').addEventListener('change', function (e) {
+      state.status = e.target.value;
+      state.page = 1;
+      fetchInventory();
+    });
+
+    document.getElementById('inventory-date-from').addEventListener('change', function (e) {
+      state.dateFrom = e.target.value;
+      state.page = 1;
+      fetchInventory();
+    });
+
+    document.getElementById('inventory-date-to').addEventListener('change', function (e) {
+      state.dateTo = e.target.value;
+      state.page = 1;
+      fetchInventory();
+    });
+
+    document.getElementById('inventory-sort').addEventListener('change', function (e) {
+      var parts = e.target.value.split(':');
+      state.sortBy = parts[0];
+      state.sortDir = parts[1];
+      state.page = 1;
+      fetchInventory();
+    });
+
+    document.getElementById('inventory-page-size').addEventListener('change', function (e) {
+      state.pageSize = parseInt(e.target.value, 10);
+      state.page = 1;
+      fetchInventory();
+    });
+
+    loadFormOptions().then(function () {
+      fetchInventory();
+      fetchSummary();
+    });
+  }
+
+  function loadFormOptions() {
+    return runServer('getInventoryFormOptions', token()).then(function (res) {
+      formOptionsCache = res.success ? res.data : { categories: [], conditions: [], statuses: [] };
+
+      populateSelect('inventory-category', formOptionsCache.categories, 'Select a category…');
+      populateSelect('inventory-condition', formOptionsCache.conditions, 'Select condition…');
+      populateSelect('inventory-status', formOptionsCache.statuses, 'Select status…');
+
+      var categoryFilter = document.getElementById('inventory-category-filter');
+      categoryFilter.innerHTML = '<option value="">All Categories</option>' +
+        formOptionsCache.categories.map(function (c) { return '<option value="' + escapeHtml(c) + '">' + escapeHtml(c) + '</option>'; }).join('');
+
+      var statusFilter = document.getElementById('inventory-status-filter');
+      statusFilter.innerHTML = '<option value="">All Statuses</option>' +
+        formOptionsCache.statuses.map(function (s) { return '<option value="' + escapeHtml(s) + '">' + escapeHtml(s) + '</option>'; }).join('');
+    });
+  }
+
+  function populateSelect(elementId, options, placeholder) {
+    var select = document.getElementById(elementId);
+    select.innerHTML = '<option value="">' + placeholder + '</option>' +
+      options.map(function (o) { return '<option value="' + escapeHtml(o) + '">' + escapeHtml(o) + '</option>'; }).join('');
+  }
+
+  function fetchSummary() {
+    var token = localStorage.getItem(MNE_SESSION_KEY);
+    runServer('getMyInventorySummary', token).then(function (res) {
+      if (!res.success) return;
+      document.getElementById('inv-summary-total').textContent = res.data.totalLines;
+      document.getElementById('inv-summary-inuse').textContent = res.data.inUse;
+      document.getElementById('inv-summary-instorage').textContent = res.data.inStorage;
+      document.getElementById('inv-summary-underrepair').textContent = res.data.underRepair;
+      document.getElementById('inv-summary-faulty').textContent = res.data.faulty;
+    });
+  }
+
+  function fetchInventory() {
+    var grid = document.getElementById('inventory-grid');
+    grid.innerHTML = '<div class="text-center text-muted py-4" style="grid-column: 1 / -1;">Loading…</div>';
+
+    var token = localStorage.getItem(MNE_SESSION_KEY);
+
+    runServer('getMyInventory', token, state).then(function (res) {
+      if (!res.success) {
+        grid.innerHTML = '<div class="alert alert-danger" style="grid-column: 1 / -1;">' + res.message + '</div>';
+        return;
+      }
+      currentRecords = res.data.records;
+      renderCards(currentRecords);
+      renderSummary(res.data.pagination);
+      renderPagination('inventory-pagination', res.data.pagination, function (p) {
+        state.page = p;
+        fetchInventory();
+      });
+    }).catch(function (err) {
+      grid.innerHTML = '<div class="alert alert-danger" style="grid-column: 1 / -1;">' + err.message + '</div>';
+    });
+  }
+
+  function renderCards(records) {
+    var grid = document.getElementById('inventory-grid');
+    if (!records.length) {
+      grid.innerHTML = '<div class="text-center text-muted py-4" style="grid-column: 1 / -1;">No inventory items yet. Click "Add Item" to log your first asset.</div>';
+      return;
+    }
+
+    grid.innerHTML = records.map(function (item) {
+      var icon = CATEGORY_ICONS[item.Category] || 'bi-box-seam';
+      var conditionBadge = CONDITION_BADGE[item.Condition] || 'badge-inactive';
+      var statusBadge = STATUS_BADGE[item.Status] || 'badge-inactive';
+      var nameAttr = escapeHtml(item.ItemName || '').replace(/'/g, "\\'");
+      var metaLine = [item.Manufacturer, item.Model].filter(Boolean).map(escapeHtml).join(' \u00b7 ');
+
+      return (
+        '<div class="inventory-card">' +
+          '<div class="inventory-card-top">' +
+            '<span class="inventory-card-category"><i class="bi ' + icon + '"></i> ' + escapeHtml(item.Category) + '</span>' +
+            (item.PhotoURL
+              ? '<img class="inventory-card-photo" src="' + escapeHtml(item.PhotoURL) + '" alt="" onerror="this.style.display=\'none\'">'
+              : '<span class="inventory-card-qty"><i class="bi bi-stack"></i> ' + item.Quantity + '</span>') +
+          '</div>' +
+          '<div class="inventory-card-name">' + escapeHtml(item.ItemName || 'Untitled Item') + '</div>' +
+          (metaLine ? '<div class="inventory-card-meta">' + metaLine + '</div>' : '') +
+          (item.SerialNumber ? '<div class="inventory-card-serial">S/N ' + escapeHtml(item.SerialNumber) + '</div>' : '') +
+          '<div class="inventory-card-badges">' +
+            '<span class="badge ' + conditionBadge + '">' + escapeHtml(item.Condition) + '</span>' +
+            '<span class="badge ' + statusBadge + '">' + escapeHtml(item.Status) + '</span>' +
+            (item.PhotoURL ? '<span class="badge bg-light text-dark"><i class="bi bi-stack"></i> ' + item.Quantity + '</span>' : '') +
+          '</div>' +
+          '<div class="inventory-card-date"><i class="bi bi-calendar3"></i> Acquired ' + escapeHtml(formatDateDisplay(item.DateAcquired)) + '</div>' +
+          '<div class="d-flex gap-2 mt-2">' +
+            '<button type="button" class="btn btn-sm btn-light flex-fill" onclick="editInventoryItem(\'' + item.InventoryID + '\')" title="Edit"><i class="bi bi-pencil"></i> Edit</button>' +
+            '<button type="button" class="btn btn-sm btn-light text-danger flex-fill" onclick="promptDeleteInventoryItem(\'' + item.InventoryID + '\', \'' + nameAttr + '\')" title="Delete"><i class="bi bi-trash"></i> Delete</button>' +
+          '</div>' +
+        '</div>'
+      );
+    }).join('');
+  }
+
+  function renderSummary(p) {
+    var el = document.getElementById('inventory-summary');
+    var start = (p.page - 1) * p.pageSize + 1;
+    var end = Math.min(p.page * p.pageSize, p.totalRecords);
+    el.textContent = p.totalRecords === 0 ? 'No records' : ('Showing ' + start + '\u2013' + end + ' of ' + p.totalRecords);
+  }
+
+  function openAddModal() {
+    var form = document.getElementById('inventory-form');
+    form.reset();
+    form.classList.remove('was-validated');
+    document.getElementById('inventory-id').value = '';
+    document.getElementById('inventory-quantity').value = 1;
+    document.getElementById('inventoryModalLabel').textContent = 'Add Inventory Item';
+    document.getElementById('inventory-save-btn').textContent = 'Save Item';
+    inventoryModal.show();
+  }
+
+  window.editInventoryItem = function (id) {
+    var record = currentRecords.find(function (item) { return item.InventoryID === id; });
+    if (!record) return;
+
+    document.getElementById('inventory-id').value = record.InventoryID;
+    document.getElementById('inventory-category').value = record.Category;
+    document.getElementById('inventory-itemname').value = record.ItemName;
+    document.getElementById('inventory-manufacturer').value = record.Manufacturer;
+    document.getElementById('inventory-model').value = record.Model;
+    document.getElementById('inventory-serial').value = record.SerialNumber;
+    document.getElementById('inventory-quantity').value = record.Quantity;
+    document.getElementById('inventory-condition').value = record.Condition;
+    document.getElementById('inventory-date-acquired').value = record.DateAcquired;
+    document.getElementById('inventory-status').value = record.Status;
+    document.getElementById('inventory-photo-url').value = record.PhotoURL;
+
+    document.getElementById('inventoryModalLabel').textContent = 'Edit Inventory Item';
+    document.getElementById('inventory-save-btn').textContent = 'Save Changes';
+    document.getElementById('inventory-form').classList.remove('was-validated');
+    inventoryModal.show();
+  };
+
+  function handleSave(e) {
+    e.preventDefault();
+
+    var form = document.getElementById('inventory-form');
+    if (!form.checkValidity()) {
+      form.classList.add('was-validated');
+      return;
+    }
+
+    var id = document.getElementById('inventory-id').value;
+    var data = {
+      Category: document.getElementById('inventory-category').value,
+      ItemName: document.getElementById('inventory-itemname').value.trim(),
+      Manufacturer: document.getElementById('inventory-manufacturer').value.trim(),
+      Model: document.getElementById('inventory-model').value.trim(),
+      SerialNumber: document.getElementById('inventory-serial').value.trim(),
+      Quantity: document.getElementById('inventory-quantity').value,
+      Condition: document.getElementById('inventory-condition').value,
+      DateAcquired: document.getElementById('inventory-date-acquired').value,
+      Status: document.getElementById('inventory-status').value,
+      PhotoURL: document.getElementById('inventory-photo-url').value.trim()
+    };
+
+    var token = localStorage.getItem(MNE_SESSION_KEY);
+    var saveBtn = document.getElementById('inventory-save-btn');
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving…';
+
+    var call = id ? runServer('updateInventoryItem', token, id, data) : runServer('addInventoryItem', token, data);
+
+    call.then(function (res) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = id ? 'Save Changes' : 'Save Item';
+      if (!res.success) {
+        showToast(res.message, 'danger');
+        return;
+      }
+      inventoryModal.hide();
+      showToast(id ? 'Inventory item updated successfully.' : 'Inventory item added successfully.', 'success');
+      fetchInventory();
+      fetchSummary();
+    }).catch(function (err) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = id ? 'Save Changes' : 'Save Item';
+      showToast(err.message, 'danger');
+    });
+  }
+
+  window.promptDeleteInventoryItem = function (id, name) {
+    pendingDeleteId = id;
+    document.getElementById('delete-inventory-name').textContent = name;
+    deleteModal.show();
+  };
+
+  function handleConfirmDelete() {
+    if (!pendingDeleteId) return;
+    var token = localStorage.getItem(MNE_SESSION_KEY);
+    runServer('deleteInventoryItem', token, pendingDeleteId).then(function (res) {
+      deleteModal.hide();
+      if (!res.success) {
+        showToast(res.message, 'danger');
+        return;
+      }
+      showToast('Inventory item deleted.', 'success');
+      fetchInventory();
+      fetchSummary();
+    }).catch(function (err) {
+      deleteModal.hide();
+      showToast(err.message, 'danger');
+    });
+  }
+})();
+</script>

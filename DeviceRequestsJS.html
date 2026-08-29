@@ -1,0 +1,77 @@
+<script>
+(function () {
+  var modal;
+  var currentRequestId = null;
+
+  /** Called once from CommonJS.html's applyIdentity() — app-shell-level like NotificationsJS, not gated behind a page. */
+  function initDeviceRequests() {
+    var modalEl = document.getElementById('deviceApprovalModal');
+    if (!modalEl) return; // standalone pages (Login.html etc.) have no Topnav
+    modal = new bootstrap.Modal(modalEl);
+    document.getElementById('btn-device-approve').addEventListener('click', handleApprove);
+    document.getElementById('btn-device-reject').addEventListener('click', handleReject);
+  }
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  function openApprovalModal(requestId) {
+    currentRequestId = requestId;
+    var body = document.getElementById('device-approval-body');
+    body.innerHTML = '<p class="text-muted small py-4">Loading…</p>';
+    setButtonsEnabled_(false);
+    modal.show();
+
+    runServer('getDeviceRequestDetail', token(), requestId).then(function (res) {
+      if (!res.success) { body.innerHTML = '<p class="text-danger py-4">' + escapeHtml(res.message) + '</p>'; return; }
+      renderRequest_(res.data);
+    });
+  }
+
+  function renderRequest_(r) {
+    var body = document.getElementById('device-approval-body');
+    if (r.Status !== 'Pending') {
+      body.innerHTML = '<p class="text-muted py-4">This request was already handled.</p>';
+      return;
+    }
+    body.innerHTML =
+      '<p class="mb-1">A device wants to join <strong>' + escapeHtml(r.HubName) + '</strong>:</p>' +
+      '<p class="mb-3">Label: <strong>' + escapeHtml(r.DeviceLabel) + '</strong></p>' +
+      '<div class="p-3 bg-light border rounded mb-3">' +
+        '<div class="text-muted small mb-1">Confirmation code</div>' +
+        '<div class="fs-2 fw-bold" style="letter-spacing:2px;">' + escapeHtml(r.ConfirmationCodeDisplay) + '</div>' +
+      '</div>' +
+      '<p class="text-muted small">Does this code match what\'s shown on the screen at the hub right now? Only approve if it does.</p>';
+    setButtonsEnabled_(true);
+  }
+
+  function setButtonsEnabled_(enabled) {
+    document.getElementById('btn-device-approve').disabled = !enabled;
+    document.getElementById('btn-device-reject').disabled = !enabled;
+  }
+
+  function handleApprove() {
+    if (!currentRequestId) return;
+    setButtonsEnabled_(false);
+    runServer('approveDeviceRequest', token(), currentRequestId).then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); setButtonsEnabled_(true); return; }
+      showToast('Device approved — it will connect automatically.', 'success');
+      modal.hide();
+      if (window.MyDevices) window.MyDevices.refresh();
+    });
+  }
+
+  function handleReject() {
+    if (!currentRequestId) return;
+    setButtonsEnabled_(false);
+    runServer('rejectDeviceRequest', token(), currentRequestId).then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); setButtonsEnabled_(true); return; }
+      showToast('Request rejected.', 'success');
+      modal.hide();
+      if (window.MyDevices) window.MyDevices.refresh();
+    });
+  }
+
+  window.DeviceRequests = { openApprovalModal: openApprovalModal };
+  window.initDeviceRequests = initDeviceRequests;
+})();
+</script>

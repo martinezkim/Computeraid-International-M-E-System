@@ -1,0 +1,224 @@
+<div class="page-header animate-float-up">
+  <div>
+    <h4>Hub Managers</h4>
+    <p>Manage hub managers and the hub each one is assigned to</p>
+  </div>
+  <button class="btn btn-primary" id="btn-add-manager">
+    <i class="bi bi-plus-lg"></i> Add Hub Manager
+  </button>
+</div>
+
+<div class="card-surface animate-float-up">
+  <div class="toolbar mb-3">
+    <div class="search-box">
+      <i class="bi bi-search"></i>
+      <input type="text" class="form-control" id="manager-search" placeholder="Search managers…">
+    </div>
+
+    <select class="form-select w-auto" id="manager-country-filter">
+      <option value="">All Countries</option>
+    </select>
+
+    <select class="form-select w-auto" id="manager-hub-filter">
+      <option value="">All Hubs</option>
+    </select>
+
+    <select class="form-select w-auto" id="manager-page-size">
+      <option value="10">10 / page</option>
+      <option value="25">25 / page</option>
+      <option value="50">50 / page</option>
+    </select>
+  </div>
+
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead>
+        <tr>
+          <th class="sortable" data-sort="FirstName">Name <i class="bi bi-arrow-down-up small"></i></th>
+          <th class="sortable" data-sort="Email">Email</th>
+          <th>Phone</th>
+          <th class="sortable" data-sort="HubName">Hub</th>
+          <th>Account</th>
+          <th class="sortable" data-sort="Status">Status</th>
+          <th class="text-end">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="managers-table-body">
+        <tr><td colspan="7" class="text-center text-muted py-4">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="d-flex justify-content-between align-items-center mt-2">
+    <small class="text-muted" id="managers-summary"></small>
+    <div id="managers-pagination"></div>
+  </div>
+</div>
+
+<!-- Add / Edit Modal -->
+<div class="modal fade" id="managerModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="manager-form" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title" id="managerModalLabel">Add Hub Manager</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="manager-original-email">
+
+          <div class="text-center mb-3">
+            <img class="bendetail-photo d-none" id="manager-photo-img" src="" alt="">
+            <span class="bendetail-photo-placeholder" id="manager-photo-placeholder"><i class="bi bi-person-fill"></i></span>
+          </div>
+
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              <label class="form-label">First Name</label>
+              <input type="text" class="form-control" id="manager-firstname" required maxlength="100">
+            </div>
+            <div class="col-md-6 mb-3">
+              <label class="form-label">Last Name</label>
+              <input type="text" class="form-control" id="manager-lastname" required maxlength="100">
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Phone</label>
+            <input type="tel" class="form-control" id="manager-phone" placeholder="e.g. +254 700 000000">
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Email</label>
+            <div class="d-flex gap-2">
+              <input type="email" class="form-control" id="manager-email" required>
+              <button type="button" class="btn btn-light text-nowrap d-none" id="btn-change-manager-email">Change Email</button>
+            </div>
+            <div class="form-text" id="manager-email-help">A temporary password and welcome email will be sent to this address.</div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Hub</label>
+            <select class="form-select" id="manager-hub" required>
+              <option value="">Select a hub…</option>
+            </select>
+            <div class="invalid-feedback">Please select a hub.</div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Status</label>
+            <select class="form-select" id="manager-status">
+              <option value="Active">Active</option>
+              <option value="Inactive">Inactive</option>
+            </select>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Address</label>
+            <input type="text" class="form-control" id="manager-address" maxlength="300">
+          </div>
+
+          <hr>
+          <p class="text-muted small mb-2">Payment details (for salary / reimbursement payouts) — optional, set by the manager from their own profile or here.</p>
+          <div class="row">
+            <div class="col-md-4 mb-3">
+              <label class="form-label">Bank Name</label>
+              <input type="text" class="form-control" id="manager-bankname" maxlength="150">
+            </div>
+            <div class="col-md-4 mb-3">
+              <label class="form-label">Account Name</label>
+              <input type="text" class="form-control" id="manager-bankaccountname" maxlength="150">
+            </div>
+            <div class="col-md-4 mb-3">
+              <label class="form-label">Account Number</label>
+              <input type="text" class="form-control" id="manager-bankaccountnumber" maxlength="60">
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-md-4 mb-3">
+              <label class="form-label">Mobile Money Provider</label>
+              <input type="text" class="form-control" id="manager-mmprovider" placeholder="e.g. M-Pesa" maxlength="60">
+            </div>
+            <div class="col-md-4 mb-3">
+              <label class="form-label">Mobile Money Name</label>
+              <input type="text" class="form-control" id="manager-mmname" maxlength="150">
+            </div>
+            <div class="col-md-4 mb-3">
+              <label class="form-label">Mobile Money Number</label>
+              <input type="text" class="form-control" id="manager-mmnumber" maxlength="60">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="manager-save-btn">Save Hub Manager</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div class="modal fade" id="managerDeleteModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Delete Hub Manager</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        Are you sure you want to delete <strong id="delete-manager-name"></strong>? This cannot be undone.
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-danger" id="confirm-delete-manager">Delete</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Resend Credentials Confirmation Modal -->
+<div class="modal fade" id="managerResendModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Resend Credentials</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        This will generate a new temporary password and reset link for
+        <strong id="resend-manager-name"></strong>, and email it to them.
+        Their current password will stop working.
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="confirm-resend-manager">Resend Credentials</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Change Email Modal -->
+<div class="modal fade" id="managerChangeEmailModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="change-email-form" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title">Change Login Email</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <p class="text-muted small">Moves <strong id="change-email-current"></strong>'s account to a new login email. Their existing password keeps working — only the email changes.</p>
+          <div class="mb-3">
+            <label class="form-label">New Email</label>
+            <input type="email" class="form-control" id="change-email-new" required>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="change-email-save-btn">Change Email</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,77 @@
+<div class="page-header animate-float-up">
+  <div>
+    <h4>Submitted Reports</h4>
+    <p>Projects filed by Hub Managers, across every hub and reporting quota</p>
+  </div>
+</div>
+
+<div class="card-surface animate-float-up">
+  <div class="toolbar mb-3">
+    <div class="search-box">
+      <i class="bi bi-search"></i>
+      <input type="text" class="form-control" id="project-search" placeholder="Search reports…">
+    </div>
+
+    <select class="form-select w-auto" id="project-country-filter">
+      <option value="">All Countries</option>
+    </select>
+
+    <select class="form-select w-auto" id="project-hub-filter">
+      <option value="">All Hubs</option>
+    </select>
+
+    <select class="form-select w-auto" id="project-quota-filter">
+      <option value="">All Reporting Quotas</option>
+    </select>
+
+    <select class="form-select w-auto" id="project-sort">
+      <option value="ProjectDate:desc">Date (Newest)</option>
+      <option value="ProjectDate:asc">Date (Oldest)</option>
+      <option value="ProjectName:asc">Name (A–Z)</option>
+      <option value="HubName:asc">Hub (A–Z)</option>
+      <option value="Cost:desc">Cost (Highest)</option>
+      <option value="TotalNewBeneficiaries:desc">Beneficiaries (Highest)</option>
+    </select>
+
+    <select class="form-select w-auto" id="project-page-size">
+      <option value="10">10 / page</option>
+      <option value="25">25 / page</option>
+      <option value="50">50 / page</option>
+    </select>
+  </div>
+
+  <!--
+    Card overview rather than a wide data table — a project has 18 data
+    fields (name, date, cost, 2 totals, 10 age bands); the 10 age-band
+    counts still live behind the "View" action (shared ProjectDetailModal)
+    instead of stretching a table into an unreadable, horizontally-
+    scrolling wall on smaller screens.
+  -->
+  <div class="project-grid" id="projects-grid">
+    <div class="text-center text-muted py-4" style="grid-column: 1 / -1;">Loading…</div>
+  </div>
+
+  <div class="d-flex justify-content-between align-items-center mt-3">
+    <small class="text-muted" id="projects-summary"></small>
+    <div id="projects-pagination"></div>
+  </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div class="modal fade" id="projectDeleteModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Delete Project</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        Are you sure you want to delete <strong id="delete-project-name"></strong>? This cannot be undone.
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-danger" id="confirm-delete-project">Delete</button>
+      </div>
+    </div>
+  </div>
+</div>

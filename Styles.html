@@ -1,0 +1,400 @@
+<style>
+  :root {
+    --sidebar-bg: #12172b;
+    --sidebar-bg-hover: #1c2340;
+    --accent: #feca38;
+    --accent-dark: #e0ac1f;
+    --ink: #12172b;
+    --bg-body: #f6f7fb;
+    --text-muted: #6b7280;
+    --border-color: #e5e7eb;
+    --radius: 10px;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg-body);
+    margin: 0;
+    color: #1f2430;
+  }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #d8dbe6; border-radius: 8px; }
+  ::-webkit-scrollbar-thumb:hover { background: #b9bdd0; }
+
+  .app-shell { display: flex; min-height: 100vh; }
+
+  /* Sidebar */
+  .sidebar {
+    width: 260px;
+    background: linear-gradient(180deg, var(--sidebar-bg) 0%, var(--sidebar-bg-hover) 130%);
+    color: #cbd0e6;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+  }
+  .sidebar-brand {
+    display: flex; align-items: center;
+    padding: 1.5rem 1.25rem;
+    border-bottom: 1px solid rgba(255,255,255,.08);
+  }
+  .sidebar-brand .brand-logo-svg { width: 148px; height: auto; display: block; }
+  .sidebar-nav { padding: .75rem .75rem; overflow-y: auto; }
+  .nav-section-label {
+    font-size: .68rem; text-transform: uppercase; letter-spacing: .08em; font-weight: 600;
+    color: #6b7290; margin: 1.1rem .6rem .4rem;
+  }
+  .nav-link {
+    display: flex; align-items: center; gap: .7rem;
+    padding: .62rem .75rem; border-radius: 10px;
+    color: #cbd0e6; text-decoration: none; font-size: .89rem; font-weight: 500;
+    margin-bottom: 3px; transition: all .18s ease; position: relative;
+  }
+  .nav-link i { font-size: 1rem; width: 1.1rem; text-align: center; transition: transform .18s ease; }
+  .nav-link:hover:not(.active) { background: rgba(255,255,255,.06); color: #fff; transform: translateX(2px); }
+  .nav-link.active {
+    background: linear-gradient(135deg, var(--accent), #ffdd6b);
+    color: var(--ink); font-weight: 700;
+    box-shadow: 0 6px 16px rgba(254,202,56,.28);
+  }
+  .nav-link.active i { transform: scale(1.05); }
+  .nav-link.disabled { opacity: .38; pointer-events: none; }
+  .nav-link .soon-pill {
+    margin-left: auto; font-size: .62rem; font-weight: 700; letter-spacing: .03em;
+    background: rgba(255,255,255,.08); color: #9aa1c4; padding: .1rem .45rem; border-radius: 999px;
+  }
+
+  /* Main area */
+  .app-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .topnav {
+    height: 68px; background: rgba(255,255,255,.85); backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border-color);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 1.5rem; position: sticky; top: 0; z-index: 10;
+  }
+  .topnav-title { font-weight: 700; font-size: 1.1rem; letter-spacing: -.01em; }
+  .btn-icon { background: none; border: none; font-size: 1.3rem; cursor: pointer; }
+  .user-chip {
+    display: flex; align-items: center; gap: .5rem;
+    background: var(--bg-body); padding: .4rem .9rem .4rem .5rem; border-radius: 999px;
+    font-size: .85rem; color: #374151; border: 1px solid var(--border-color);
+  }
+  .user-chip .avatar-dot {
+    width: 26px; height: 26px; border-radius: 999px;
+    background: linear-gradient(135deg, var(--accent), #ffdd6b);
+    display: flex; align-items: center; justify-content: center; color: var(--ink); font-size: .9rem;
+  }
+
+  /* Small circular photo/placeholder used wherever a beneficiary's name
+     is listed (Beneficiaries tables, Admin + Hub Manager) — self-uploaded
+     via the PWA profile screen, so most rows won't have one yet. */
+  .beneficiary-thumb-wrap { display: flex; align-items: center; gap: .6rem; }
+  .beneficiary-thumb, .beneficiary-thumb-placeholder {
+    width: 32px; height: 32px; border-radius: 999px; flex-shrink: 0; object-fit: cover;
+  }
+  .beneficiary-thumb-placeholder {
+    background: var(--bg-body); border: 1px solid var(--border-color);
+    display: flex; align-items: center; justify-content: center; color: #9aa1b5; font-size: 1rem;
+  }
+  tr.beneficiary-row { cursor: pointer; }
+  tr.beneficiary-row:hover { background: var(--bg-body); }
+
+  /* Larger photo/placeholder for the Beneficiary Detail modal. */
+  .bendetail-photo, .bendetail-photo-placeholder {
+    width: 110px; height: 110px; border-radius: 999px; object-fit: cover;
+    border: 3px solid var(--accent); display: inline-flex;
+  }
+  .bendetail-photo-placeholder {
+    background: var(--bg-body); color: #9aa1b5; font-size: 2.6rem;
+    align-items: center; justify-content: center;
+  }
+  .bendetail-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0 1.5rem;
+  }
+  .bendetail-row { display: flex; justify-content: space-between; gap: 0.75rem; padding: 0.5rem 0; border-bottom: 1px solid var(--border-color); font-size: 0.88rem; }
+  .bendetail-row .k { color: var(--text-muted); }
+  .bendetail-row .v { font-weight: 600; text-align: right; }
+
+  .content-area { padding: 1.5rem; flex: 1; }
+
+  /* Cards / SaaS widgets */
+  .card-surface {
+    background: #fff; border-radius: 16px; border: 1px solid var(--border-color);
+    padding: 1.25rem 1.5rem; box-shadow: 0 1px 2px rgba(16,24,40,.04);
+  }
+
+  .page-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 1.25rem; flex-wrap: wrap; gap: .75rem;
+  }
+  .page-header h4 { margin: 0; font-weight: 800; letter-spacing: -.01em; }
+  .page-header p { margin: 0; color: var(--text-muted); font-size: .85rem; }
+
+  .btn-primary {
+    background: linear-gradient(135deg, var(--accent), #ffdd6b);
+    border-color: var(--accent); color: var(--ink); font-weight: 600;
+    box-shadow: 0 4px 12px rgba(254,202,56,.3); transition: all .18s ease;
+  }
+  .btn-primary:hover {
+    background: linear-gradient(135deg, var(--accent-dark), var(--accent));
+    border-color: var(--accent-dark); color: var(--ink);
+    transform: translateY(-1px); box-shadow: 0 6px 16px rgba(254,202,56,.4);
+  }
+
+  .table thead th {
+    font-size: .75rem; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--text-muted); border-bottom: 2px solid var(--border-color); font-weight: 600;
+  }
+  .table td { vertical-align: middle; font-size: .9rem; }
+  .table tbody tr { transition: background .12s ease; }
+  .table tbody tr:hover { background: #fdf9ee; }
+
+  .badge-active { background: #e6f7ee; color: #0f9d58; font-weight: 500; }
+  .badge-inactive { background: #fdecea; color: #d93025; font-weight: 500; }
+
+  .toolbar { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+  .search-box { position: relative; min-width: 240px; }
+  .search-box i {
+    position: absolute; left: .75rem; top: 50%; transform: translateY(-50%); color: var(--text-muted);
+  }
+  .search-box input { padding-left: 2.2rem; }
+  .search-box input:focus, .form-select:focus, .form-control:focus {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 .2rem rgba(254,202,56,.25) !important;
+  }
+
+  .page-loader { display: flex; justify-content: center; padding: 3rem; color: var(--accent-dark); }
+
+  /* Animations (previously generated by Tailwind's runtime compiler —
+     now plain CSS so nothing recompiles styles on every DOM mutation,
+     which is what caused modals to freeze inside Apps Script's
+     sandboxed iframe). */
+  @keyframes floatUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes popIn { from { opacity: 0; transform: scale(.97); } to { opacity: 1; transform: scale(1); } }
+  .animate-float-up { animation: floatUp .55s cubic-bezier(.16,1,.3,1) both; }
+  .animate-pop-in { animation: popIn .3s cubic-bezier(.16,1,.3,1) both; }
+
+  /* CAUTION: .animate-pop-in uses `transform`. Never leave it applied to an
+     element that contains a Bootstrap modal (like #main-content) — a
+     lingering `transform` on an ancestor turns it into the positioning
+     anchor for position:fixed children, which silently breaks/mispositions
+     modals. CommonJS.html's loadPage() strips this class as soon as the
+     animation ends specifically to avoid that trap. */
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-float-up, .animate-pop-in { animation: none; }
+  }
+
+  /* Stat row: 5 equal-width mini cards, evenly spread across the row.
+     Narrows to fewer columns as the viewport shrinks. */
+  .stat-grid {
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: 1rem;
+  }
+  @media (max-width: 1300px) { .stat-grid { grid-template-columns: repeat(3, 1fr); } }
+  @media (max-width: 760px)  { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 460px)  { .stat-grid { grid-template-columns: 1fr; } }
+
+  /* Hub Manager dashboard: 3 cards instead of the admin's 5 */
+  .stat-grid-3 { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 760px) { .stat-grid-3 { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 460px) { .stat-grid-3 { grid-template-columns: 1fr; } }
+
+  /* Colorful animated dashboard stat cards (compact "mini card" style) */
+  .stat-tile {
+    position: relative; overflow: hidden; border-radius: 16px; padding: 1rem 1.1rem;
+    color: #fff; min-height: 88px; display: flex; flex-direction: row; align-items: center; gap: .85rem;
+    box-shadow: 0 8px 18px -8px rgba(0,0,0,.18);
+    transition: transform .25s cubic-bezier(.16,1,.3,1), box-shadow .25s ease;
+  }
+  .stat-tile:hover { transform: translateY(-3px) scale(1.01); box-shadow: 0 14px 26px -10px rgba(0,0,0,.26); }
+  .stat-tile .stat-icon {
+    width: 38px; height: 38px; border-radius: 11px; background: rgba(255,255,255,.2);
+    display: flex; align-items: center; justify-content: center; font-size: 1rem; flex-shrink: 0;
+  }
+  .stat-tile .stat-value { font-size: 1.5rem; font-weight: 800; letter-spacing: -.02em; line-height: 1.1; }
+  .stat-tile .stat-label { font-size: .72rem; font-weight: 600; opacity: .92; margin-top: .1rem; }
+  .stat-tile .stat-year-tag { font-weight: 500; opacity: .75; }
+  .stat-tile .stat-glow {
+    position: absolute; width: 90px; height: 90px; border-radius: 999px;
+    background: rgba(255,255,255,.14); top: -35px; right: -30px; filter: blur(2px);
+  }
+  .stat-tile.tile-muted {
+    color: #6b7280; background: #eef0f6 !important; box-shadow: none; border: 1.5px dashed #d7dae4;
+  }
+  .stat-tile.tile-muted .stat-icon { background: #e1e4ee; color: #8a8fa8; }
+  .stat-tile .soon-badge {
+    position: absolute; top: .55rem; right: .65rem; font-size: .56rem; font-weight: 700; letter-spacing: .03em;
+    text-transform: uppercase; background: rgba(255,255,255,.85); color: #4b5060; padding: .15rem .4rem; border-radius: 999px;
+  }
+
+  /* Shared Project Detail modal */
+  .detail-stat { text-align: center; background: var(--bg-body, #f4f5fa); border-radius: 12px; padding: .85rem .5rem; }
+  .detail-stat .detail-stat-value { font-size: 1.4rem; font-weight: 800; color: var(--ink, #12172b); }
+  .detail-stat .detail-stat-label { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted, #6b7280); }
+
+  .age-bar-row { display: flex; align-items: center; gap: .75rem; margin-bottom: .55rem; }
+  .age-bar-label { width: 3.2rem; flex-shrink: 0; font-size: .8rem; color: var(--text-muted, #6b7280); font-weight: 600; }
+  .age-bar-track { flex: 1; height: 10px; background: #eef0f6; border-radius: 999px; overflow: hidden; }
+  .age-bar-fill { height: 100%; background: linear-gradient(135deg, var(--accent), #ffdd6b); border-radius: 999px; transition: width .4s ease; }
+  .age-bar-count { width: 2rem; text-align: right; font-size: .82rem; font-weight: 700; flex-shrink: 0; }
+
+  /* Project overview cards — 5 per row, used on both the admin's
+     Submitted Reports page and the Hub Manager's My Projects page. */
+  .project-grid {
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: 1rem;
+  }
+  @media (max-width: 1400px) { .project-grid { grid-template-columns: repeat(4, 1fr); } }
+  @media (max-width: 1100px) { .project-grid { grid-template-columns: repeat(3, 1fr); } }
+  @media (max-width: 800px)  { .project-grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 500px)  { .project-grid { grid-template-columns: 1fr; } }
+
+  .project-card {
+    background: #fff; border: 1px solid var(--border-color); border-radius: 14px; padding: 1rem;
+    display: flex; flex-direction: column; gap: .4rem; cursor: pointer;
+    transition: transform .2s ease, box-shadow .2s ease;
+  }
+  .project-card:hover { transform: translateY(-3px); box-shadow: 0 12px 24px -12px rgba(0,0,0,.2); }
+  .project-card-name {
+    font-weight: 700; font-size: .92rem; line-height: 1.3;
+    overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  }
+  .project-card-hub { font-size: .74rem; color: var(--text-muted); font-weight: 600; }
+  .project-card-quota {
+    align-self: flex-start; background: var(--bg-body); color: #4b5060; font-size: .66rem; font-weight: 700;
+    padding: .18rem .55rem; border-radius: 999px; margin-top: .1rem;
+  }
+  .project-card-date { font-size: .76rem; color: var(--text-muted); display: flex; align-items: center; gap: .3rem; }
+  .project-card-stats {
+    display: flex; justify-content: space-between; border-top: 1px solid var(--border-color);
+    padding-top: .55rem; margin-top: .2rem;
+  }
+  .project-card-stats .stat-block { text-align: left; }
+  .project-card-stats .stat-block:last-child { text-align: right; }
+  .project-card-stats .stat-block-label { display: block; font-size: .62rem; text-transform: uppercase; letter-spacing: .03em; color: var(--text-muted); }
+  .project-card-stats .stat-block-value { font-weight: 800; font-size: .95rem; color: var(--ink, #12172b); }
+
+  /* Admin's Reporting Quota cards — reuse .project-grid for layout,
+     but these have action buttons instead of being click-to-open. */
+  .quota-admin-card {
+    background: #fff; border: 1px solid var(--border-color); border-radius: 14px; padding: 1.1rem;
+    transition: transform .2s ease, box-shadow .2s ease;
+  }
+  .quota-admin-card:hover { transform: translateY(-3px); box-shadow: 0 12px 24px -12px rgba(0,0,0,.16); }
+  .quota-admin-card-quarter {
+    display: inline-block; font-size: 1.15rem; font-weight: 800; color: var(--ink, #12172b);
+    background: linear-gradient(135deg, var(--accent), #ffdd6b);
+    padding: .2rem .7rem; border-radius: 999px;
+  }
+  .quota-admin-card-year { font-size: .82rem; color: var(--text-muted); font-weight: 600; margin-top: .35rem; }
+  .quota-admin-card-stat {
+    font-size: .82rem; color: var(--text-muted); border-top: 1px solid var(--border-color);
+    padding-top: .6rem; margin-top: .7rem;
+  }
+  .quota-admin-card-stat strong { color: var(--ink, #12172b); font-size: .95rem; }
+
+  /* Inventory at the Hub — item cards. Reuses .project-grid for layout. */
+  .inventory-card {
+    background: #fff; border: 1px solid var(--border-color); border-radius: 14px; padding: 1rem;
+    display: flex; flex-direction: column; gap: .4rem;
+    transition: transform .2s ease, box-shadow .2s ease;
+  }
+  .inventory-card:hover { transform: translateY(-3px); box-shadow: 0 12px 24px -12px rgba(0,0,0,.18); }
+  .inventory-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: .5rem; }
+  .inventory-card-category {
+    display: inline-flex; align-items: center; gap: .35rem; font-size: .64rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .03em; color: #4b5060; background: var(--bg-body);
+    padding: .18rem .55rem; border-radius: 999px;
+  }
+  .inventory-card-photo {
+    width: 42px; height: 42px; border-radius: 10px; object-fit: cover; border: 1px solid var(--border-color); flex-shrink: 0;
+  }
+  .inventory-card-qty { font-size: .8rem; font-weight: 700; color: var(--ink, #12172b); white-space: nowrap; }
+  .inventory-card-name {
+    font-weight: 700; font-size: .92rem; line-height: 1.3;
+    overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  }
+  .inventory-card-meta { font-size: .78rem; color: var(--text-muted); }
+  .inventory-card-serial { font-size: .72rem; color: var(--text-muted); font-family: 'SFMono-Regular', Consolas, monospace; }
+  .inventory-card-badges { display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .1rem; }
+  .inventory-card-date { font-size: .74rem; color: var(--text-muted); display: flex; align-items: center; gap: .3rem; margin-top: .1rem; }
+
+  .badge-condition-new { background: #e6f7ee; color: #0f9d58; font-weight: 500; }
+  .badge-condition-refurbished { background: #fff4e0; color: #b8790a; font-weight: 500; }
+
+  .badge-status-inuse { background: #e6f0fd; color: #1a56c4; font-weight: 500; }
+  .badge-status-instorage { background: #eef0f6; color: #4b5060; font-weight: 500; }
+  .badge-status-underrepair { background: #fff4e0; color: #b8790a; font-weight: 500; }
+  .badge-status-faulty { background: #fdecea; color: #d93025; font-weight: 500; }
+  .badge-status-decommissioned { background: #fdecea; color: #7d0f04; font-weight: 500; }
+
+  .badge-laptop-stock { background: #e6f0fd; color: #1a56c4; font-weight: 500; }
+  .badge-laptop-sold { background: #e6f7ee; color: #0f9d58; font-weight: 500; }
+  .badge-laptop-faulty { background: #fdecea; color: #d93025; font-weight: 500; }
+
+  /* Inventory Summary — compact tally cards for the Hub Inventory
+     breakdown (many small numbers, so a lighter style than .stat-tile). */
+  .mini-stat-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .75rem;
+  }
+  .mini-stat-card {
+    background: #fff; border: 1px solid var(--border-color); border-radius: 12px; padding: .85rem 1rem;
+    display: flex; flex-direction: column; gap: .3rem;
+  }
+  .mini-stat-icon {
+    width: 32px; height: 32px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
+    font-size: .95rem; color: #fff;
+  }
+  .mini-stat-value { font-size: 1.3rem; font-weight: 800; color: var(--ink, #12172b); line-height: 1.1; }
+  .mini-stat-label { font-size: .68rem; color: var(--text-muted, #6b7280); font-weight: 600; text-transform: uppercase; letter-spacing: .02em; }
+
+  /* Pill sub-tabs (Laptops for Sale: Current Stock / Sold / Faulty) */
+  .pill-tabs { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  .pill-tab {
+    border: 1.5px solid var(--border-color); background: #fff; color: var(--text-muted, #6b7280);
+    border-radius: 999px; padding: .4rem 1rem; font-size: .85rem; font-weight: 600; cursor: pointer;
+    transition: all .15s ease;
+  }
+  .pill-tab:hover { border-color: var(--accent); color: var(--ink, #12172b); }
+  .pill-tab.active { background: var(--accent); border-color: var(--accent); color: #1a1200; }
+
+  /* Import preview table */
+  .import-preview-table { max-height: 320px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 10px; }
+  .import-preview-table table { margin-bottom: 0; }
+  .import-preview-table thead th { position: sticky; top: 0; background: #fff; z-index: 1; }
+  .import-error-row { background: #fdecea !important; }
+
+  /* Idle-timeout warning banner — fixed to the very top, above everything
+     including modals, sliding down only when a logout is imminent. */
+  .idle-warning-banner {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 2000;
+    background: linear-gradient(135deg, #f43f5e, #fb7185); color: #fff;
+    padding: .65rem 1.25rem; display: flex; align-items: center; justify-content: center; gap: 1rem;
+    font-size: .85rem; font-weight: 600; box-shadow: 0 4px 14px rgba(0,0,0,.18);
+    transform: translateY(-100%); transition: transform .25s ease;
+  }
+  .idle-warning-banner.show { transform: translateY(0); }
+  .idle-warning-banner .btn { color: #f43f5e; font-weight: 700; }
+
+  /* Add Project wizard (progressive, step-by-step — not one long modal) */
+  .wizard-progress {
+    height: 6px; background: #eef0f6; border-radius: 999px; overflow: hidden;
+  }
+  .wizard-progress-bar {
+    height: 100%; background: linear-gradient(135deg, var(--accent), #ffdd6b);
+    border-radius: 999px; transition: width .3s ease;
+  }
+  .wizard-running-total {
+    font-size: .82rem; font-weight: 600; color: var(--text-muted, #6b7280);
+  }
+  .review-summary { font-size: .9rem; }
+
+  @media (max-width: 991px) {
+    .sidebar { position: fixed; left: -270px; z-index: 1000; transition: left .2s ease; height: 100vh; }
+    .sidebar.open { left: 0; }
+  }
+</style>

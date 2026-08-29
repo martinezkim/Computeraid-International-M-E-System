@@ -1,0 +1,432 @@
+<script>
+  /**
+   * ============================================================
+   * TOP-FRAME REDIRECT (session expiry, post-login, logout)
+   * ============================================================
+   * Apps Script serves this app inside a sandboxed iframe
+   * (script.googleusercontent.com inside a script.google.com
+   * wrapper). That sandbox only allows navigating window.top in
+   * direct response to a fresh user gesture (a click, essentially).
+   * Every redirect in this app fires from inside a google.script.run
+   * .then()/.catch() callback — by the time the server round-trip
+   * finishes, the browser often no longer counts it as
+   * gesture-driven, so `window.top.location.href = url` silently
+   * throws a SecurityError and the page is left stuck exactly as it
+   * was — this is what caused the "stuck on Loading forever, no
+   * access to any tab" bug.
+   *
+   * goToTopUrl() tries the direct assignment first (still works when
+   * the gesture is fresh enough), and if that throws, replaces the
+   * whole page with a real <a target="_top"> link instead. An actual
+   * anchor click always carries genuine user activation, so it can't
+   * hit the same wall — the user just has one extra click instead of
+   * a frozen screen.
+   */
+  function goToTopUrl(url, message) {
+    try {
+      window.top.location.href = url;
+    } catch (err) {
+      document.body.innerHTML =
+        '<div style="display:flex; align-items:center; justify-content:center; min-height:100vh; ' +
+        'font-family: Inter, system-ui, sans-serif; background:#f4f5fa;">' +
+          '<div style="text-align:center; background:#fff; padding:2rem 2.5rem; border-radius:16px; box-shadow:0 8px 24px -8px rgba(0,0,0,.15);">' +
+            '<p style="margin:0 0 1rem; color:#4b5060;">' + (message || 'Click below to continue.') + '</p>' +
+            '<a href="' + url + '" target="_top" style="display:inline-block; background:#feca38; color:#1a1200; ' +
+            'font-weight:700; padding:.6rem 1.4rem; border-radius:10px; text-decoration:none;">Continue</a>' +
+          '</div>' +
+        '</div>';
+    }
+  }
+
+  /**
+   * ============================================================
+   * RECORD EXPORT (CSV / Excel / PDF)
+   * ============================================================
+   * One shared exporter for every "export this list" button in the
+   * app. `columns` is [{key, label}, ...] — pass it to control which
+   * fields appear and their header text; omit it to dump every field
+   * on the first record as-is. CSV and Excel (via the SheetJS library
+   * already loaded for spreadsheet import) build the file entirely
+   * client-side and trigger a normal download. PDF opens a plain,
+   * print-formatted new tab and calls window.print() — the browser's
+   * own "Save as PDF" is what actually produces the PDF, so there's
+   * no extra library dependency for it.
+   */
+  function exportRecordsToFile(records, columns, format, filenameBase) {
+    if (!records || !records.length) {
+      showToast('Nothing to export.', 'warning');
+      return;
+    }
+    var cols = columns || Object.keys(records[0]).map(function (k) { return { key: k, label: k }; });
+
+    if (format === 'csv') {
+      var lines = [cols.map(function (c) { return csvEscapeShared_(c.label); }).join(',')];
+      records.forEach(function (r) {
+        lines.push(cols.map(function (c) { return csvEscapeShared_(r[c.key]); }).join(','));
+      });
+      downloadBlob_(lines.join('\n'), filenameBase + '.csv', 'text/csv');
+    } else if (format === 'xlsx') {
+      var sheetRows = records.map(function (r) {
+        var obj = {};
+        cols.forEach(function (c) { obj[c.label] = r[c.key]; });
+        return obj;
+      });
+      var ws = XLSX.utils.json_to_sheet(sheetRows);
+      var wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Data');
+      XLSX.writeFile(wb, filenameBase + '.xlsx');
+    } else if (format === 'pdf') {
+      var win = window.open('', '_blank');
+      if (!win) {
+        showToast('Please allow pop-ups to export as PDF.', 'warning');
+        return;
+      }
+      var html = '<html><head><title>' + filenameBase + '</title><style>' +
+        'body{font-family:Inter,system-ui,sans-serif;padding:24px;} ' +
+        'table{border-collapse:collapse;width:100%;font-size:11px;} ' +
+        'th,td{border:1px solid #ccc;padding:5px 7px;text-align:left;} th{background:#f4f5fa;}' +
+        '</style></head><body>' +
+        '<h3>' + escapeHtml(filenameBase) + '</h3>' +
+        '<table><thead><tr>' + cols.map(function (c) { return '<th>' + escapeHtml(c.label) + '</th>'; }).join('') + '</tr></thead><tbody>' +
+        records.map(function (r) {
+          return '<tr>' + cols.map(function (c) { return '<td>' + escapeHtml(r[c.key] == null ? '' : String(r[c.key])) + '</td>'; }).join('') + '</tr>';
+        }).join('') +
+        '</tbody></table></body></html>';
+      win.document.write(html);
+      win.document.close();
+      win.focus();
+      setTimeout(function () { win.print(); }, 400);
+    }
+  }
+
+  function csvEscapeShared_(v) {
+    v = String(v == null ? '' : v);
+    return /[",\n]/.test(v) ? ('"' + v.replace(/"/g, '""') + '"') : v;
+  }
+
+  function downloadBlob_(content, filename, mime) {
+    var blob = new Blob([content], { type: mime });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+
+  /**
+   * ============================================================
+   * CORE CLIENT-SIDE UTILITIES
+   * ============================================================
+   * Generic helpers with zero dependency on the SPA shell's DOM
+   * (#main-content, #sidebar, etc.) — included by Index.html AND
+   * by the standalone Login.html / ResetPassword.html pages,
+   * which don't have that shell around them.
+   *
+   * SPA-shell-specific logic (page routing, nav state, identity)
+   * lives in CommonJS.html instead.
+   * ============================================================
+   */
+
+  /**
+   * Wraps google.script.run in a Promise so module code can use
+   * async/await style instead of nested callbacks.
+   * e.g. const res = await runServer('getCountries', options);
+   */
+  function runServer(functionName) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    return new Promise(function (resolve, reject) {
+      google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler(reject)
+        [functionName].apply(null, args);
+    });
+  }
+
+  /**
+   * Toast notifications (Bootstrap 5 toasts under the hood).
+   * Requires a `<div id="toast-container">` somewhere on the page.
+   * showToast('Country added', 'success' | 'danger' | 'warning' | 'info')
+   */
+  function showToast(message, type) {
+    type = type || 'success';
+    var icons = {
+      success: 'bi-check-circle-fill',
+      danger: 'bi-x-circle-fill',
+      warning: 'bi-exclamation-triangle-fill',
+      info: 'bi-info-circle-fill'
+    };
+    var container = document.getElementById('toast-container');
+    if (!container) return;
+
+    var el = document.createElement('div');
+    el.className = 'toast align-items-center text-white bg-' + type + ' border-0';
+    el.setAttribute('role', 'alert');
+    el.innerHTML =
+      '<div class="d-flex">' +
+        '<div class="toast-body"><i class="bi ' + icons[type] + ' me-2"></i>' + message + '</div>' +
+        '<button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>' +
+      '</div>';
+    container.appendChild(el);
+
+    var toast = new bootstrap.Toast(el, { delay: 3500 });
+    toast.show();
+    el.addEventListener('hidden.bs.toast', function () { el.remove(); });
+  }
+
+  /** Debounce helper for live search inputs. */
+  function debounce(fn, delay) {
+    var timer;
+    return function () {
+      var args = arguments;
+      clearTimeout(timer);
+      timer = setTimeout(function () { fn.apply(null, args); }, delay || 300);
+    };
+  }
+
+  /**
+   * Builds Bootstrap-style pagination controls into a container.
+   * onPageChange(pageNumber) fires when a page link is clicked.
+   */
+  function renderPagination(containerId, pagination, onPageChange) {
+    var el = document.getElementById(containerId);
+    if (!el) return;
+    var p = pagination;
+    var html = '<nav><ul class="pagination pagination-sm mb-0">';
+
+    html += '<li class="page-item ' + (p.page <= 1 ? 'disabled' : '') + '"><a class="page-link" href="#" data-p="' + (p.page - 1) + '">Previous</a></li>';
+    for (var i = 1; i <= p.totalPages; i++) {
+      html += '<li class="page-item ' + (i === p.page ? 'active' : '') + '"><a class="page-link" href="#" data-p="' + i + '">' + i + '</a></li>';
+    }
+    html += '<li class="page-item ' + (p.page >= p.totalPages ? 'disabled' : '') + '"><a class="page-link" href="#" data-p="' + (p.page + 1) + '">Next</a></li>';
+    html += '</ul></nav>';
+
+    el.innerHTML = html;
+    el.querySelectorAll('.page-link').forEach(function (a) {
+      a.addEventListener('click', function (e) {
+        e.preventDefault();
+        var target = parseInt(this.dataset.p, 10);
+        if (target >= 1 && target <= p.totalPages) onPageChange(target);
+      });
+    });
+  }
+
+  /** Simple HTML-escaping helper shared by every module's table renderer. */
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  /**
+   * Animates a stat tile's number counting up from 0 to `target`.
+   * Shared by every stat-card grid in the app (admin dashboard, Hub
+   * Manager dashboard, ...).
+   */
+  function animateCount(elementId, target) {
+    var el = document.getElementById(elementId);
+    if (!el) return;
+    target = Number(target) || 0;
+
+    var duration = 700;
+    var start = null;
+
+    function step(timestamp) {
+      if (!start) start = timestamp;
+      var progress = Math.min((timestamp - start) / duration, 1);
+      var eased = 1 - Math.pow(1 - progress, 3); // ease-out cubic
+      el.textContent = Math.round(eased * target);
+      if (progress < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+
+  /**
+   * Formats a number using the system-wide currency symbol (Admin-set
+   * via Countries page, defaults to KES) — e.g. 1234.5 -> "KSh 1,234.50".
+   * window.MNE_CURRENCY is populated once at boot (see Index.html), so
+   * every page's formatCurrency calls stay in sync without each one
+   * fetching it separately.
+   */
+  function formatCurrency(amount) {
+    var num = Number(amount) || 0;
+    var symbol = (window.MNE_CURRENCY && window.MNE_CURRENCY.symbol) || 'KSh';
+    return symbol + ' ' + num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  /**
+   * Formats a number using a SPECIFIC currency code's symbol, not the
+   * system-wide one — needed by the Finance module, where each
+   * FinancialAccount carries its own Currency and figures for
+   * different accounts/currencies must never be summed together (see
+   * FINANCE_MODULE_INSTRUCTIONS.md §6). Looks the symbol up from
+   * window.MNE_CURRENCY.catalog (the same CURRENCY_CATALOG the boot
+   * sequence already fetched via getSystemCurrency — see Index.html),
+   * falling back to the raw code if it's not in the catalog.
+   */
+  function formatCurrencyIn(amount, code) {
+    var num = Number(amount) || 0;
+    var catalog = (window.MNE_CURRENCY && window.MNE_CURRENCY.catalog) || [];
+    var match = catalog.filter(function (c) { return c.code === code; })[0];
+    var symbol = match ? match.symbol : (code || '');
+    return (symbol ? symbol + ' ' : '') + num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  /** Formats a 'yyyy-MM-dd' date string as "Aug 15, 2026" for display. */
+  function formatDateDisplay(isoDateStr) {
+    if (!isoDateStr) return '';
+    var parts = String(isoDateStr).split('-');
+    if (parts.length !== 3) return isoDateStr;
+    var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    var monthIndex = parseInt(parts[1], 10) - 1;
+    return (months[monthIndex] || parts[1]) + ' ' + parseInt(parts[2], 10) + ', ' + parts[0];
+  }
+
+  /**
+   * Formats a start/end 'yyyy-MM-dd' pair as a single display string —
+   * "Nov 5, 2026" when there's no end date or it's the same as the
+   * start (single-day project, or an older record from before end
+   * dates existed), otherwise "Nov 5 – Nov 12, 2026".
+   */
+  function formatDateRangeDisplay(startIsoDateStr, endIsoDateStr) {
+    if (!endIsoDateStr || endIsoDateStr === startIsoDateStr) return formatDateDisplay(startIsoDateStr);
+    return formatDateDisplay(startIsoDateStr) + ' – ' + formatDateDisplay(endIsoDateStr);
+  }
+
+  /**
+   * Reusable "attach a financial document" control — every Finance
+   * module form (Funding, Balance Adjustments, and from Phase 17 Step
+   * 4/5 onward Invoices/Expenses/Reimbursements/Salaries) wires one of
+   * these onto a `<input type="file">` + a small status element,
+   * instead of each form reimplementing the same upload/preview/remove
+   * logic. Uploads immediately on file selection (via
+   * uploadFinancialDocument in FinanceDocuments.gs) and hands back a
+   * DocumentID for the form to submit — NOT the file itself, so the
+   * parent form's save call stays small regardless of file size.
+   *
+   * opts: {
+   *   inputId: the <input type="file"> element's id,
+   *   statusId: an element (e.g. a <div>) to show upload status/result in,
+   *   documentType: short label stored on the FinancialDocuments row (e.g. 'Funding Proof', 'Adjustment Support'),
+   *   onUploaded: optional function(documentId, fileName),
+   *   onCleared: optional function()
+   * }
+   * Returns { getDocumentId, setExisting, reset } so the calling page
+   * can read the current DocumentID at submit time, pre-fill it when
+   * editing a record that already has one, and reset the control when
+   * its modal is reopened.
+   */
+  function initFinanceDocumentUpload(opts) {
+    var currentDocumentId = '';
+    var currentFileName = '';
+    var input = document.getElementById(opts.inputId);
+    var status = document.getElementById(opts.statusId);
+    var maxBytes = 8 * 1024 * 1024;
+
+    function render() {
+      if (!status) return;
+      if (currentDocumentId) {
+        status.innerHTML = '<span class="text-success small"><i class="bi bi-paperclip"></i> ' + escapeHtml(currentFileName) + '</span> ' +
+          '<button type="button" class="btn btn-sm btn-link p-0 ms-2" data-role="finance-doc-remove">Remove</button>';
+        var removeBtn = status.querySelector('[data-role="finance-doc-remove"]');
+        if (removeBtn) {
+          removeBtn.addEventListener('click', function () {
+            currentDocumentId = '';
+            currentFileName = '';
+            if (input) input.value = '';
+            render();
+            if (opts.onCleared) opts.onCleared();
+          });
+        }
+      } else {
+        status.innerHTML = '';
+      }
+    }
+
+    if (input) {
+      input.addEventListener('change', function () {
+        var file = input.files && input.files[0];
+        if (!file) return;
+        if (file.size > maxBytes) {
+          status.innerHTML = '<span class="text-danger small">File is too large (max 8MB).</span>';
+          input.value = '';
+          return;
+        }
+        status.innerHTML = '<span class="text-muted small">Uploading…</span>';
+        var reader = new FileReader();
+        reader.onload = function () {
+          var base64 = String(reader.result).split(',')[1];
+          runServer('uploadFinancialDocument', localStorage.getItem(MNE_SESSION_KEY), {
+            base64: base64,
+            mimeType: file.type || 'application/octet-stream',
+            fileName: file.name,
+            documentType: opts.documentType || ''
+          }).then(function (res) {
+            if (!res.success) {
+              status.innerHTML = '<span class="text-danger small">' + escapeHtml(res.message) + '</span>';
+              input.value = '';
+              return;
+            }
+            currentDocumentId = res.data.documentId;
+            currentFileName = res.data.fileName;
+            render();
+            if (opts.onUploaded) opts.onUploaded(currentDocumentId, currentFileName);
+          }).catch(function (err) {
+            status.innerHTML = '<span class="text-danger small">' + escapeHtml(err.message) + '</span>';
+            input.value = '';
+          });
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    return {
+      getDocumentId: function () { return currentDocumentId; },
+      setExisting: function (documentId, fileName) {
+        currentDocumentId = documentId || '';
+        currentFileName = fileName || '';
+        render();
+      },
+      reset: function () {
+        currentDocumentId = '';
+        currentFileName = '';
+        if (input) input.value = '';
+        render();
+      }
+    };
+  }
+
+  /**
+   * Opens a financial document (fetched via getFinancialDocument in
+   * FinanceDocuments.gs) in a new tab. The window is opened
+   * SYNCHRONOUSLY, in direct response to the click, so it isn't
+   * blocked as a popup — it's then navigated once the async fetch
+   * resolves.
+   *
+   * IMPORTANT: that navigation must go to a blob: URL, not a data:
+   * URL. Chrome (and other modern browsers) silently blocks
+   * navigating a tab's TOP-LEVEL location to a data: URL from script
+   * — a security measure against data-URL phishing — which looks
+   * exactly like nothing happening: the tab just sits on whatever
+   * placeholder text was written into it. blob: URLs made via
+   * URL.createObjectURL() are exempt from that restriction and are
+   * the standard way to hand a script-generated file to the browser.
+   */
+  function viewFinancialDocument(documentId) {
+    var win = window.open('', '_blank');
+    if (win) win.document.write('Loading document…');
+    runServer('getFinancialDocument', localStorage.getItem(MNE_SESSION_KEY), documentId).then(function (res) {
+      if (!res.success) { if (win) win.close(); showToast(res.message, 'danger'); return; }
+      var bytes = atob(res.data.base64);
+      var buffer = new Uint8Array(bytes.length);
+      for (var i = 0; i < bytes.length; i++) buffer[i] = bytes.charCodeAt(i);
+      var blob = new Blob([buffer], { type: res.data.mimeType });
+      var blobUrl = URL.createObjectURL(blob);
+      if (win) win.location.href = blobUrl;
+      else window.open(blobUrl, '_blank');
+    }).catch(function (err) {
+      if (win) win.close();
+      showToast(err.message, 'danger');
+    });
+  }
+</script>

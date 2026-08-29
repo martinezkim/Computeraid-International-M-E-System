@@ -1,0 +1,350 @@
+<script>
+(function () {
+  var state = { search: '', sortBy: 'FirstName', sortDir: 'asc', page: 1, pageSize: 10, hubId: '', countryId: '' };
+  var managerModal, deleteModal, resendModal, changeEmailModal;
+  var pendingDeleteEmail, pendingResendEmail, pendingChangeEmailOldAddress;
+  var hubOptions = [];
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'managers') return;
+    initManagersPage();
+  });
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  function initManagersPage() {
+    state = { search: '', sortBy: 'FirstName', sortDir: 'asc', page: 1, pageSize: 10, hubId: '', countryId: '' };
+    managerModal = new bootstrap.Modal(document.getElementById('managerModal'));
+    deleteModal = new bootstrap.Modal(document.getElementById('managerDeleteModal'));
+    resendModal = new bootstrap.Modal(document.getElementById('managerResendModal'));
+    changeEmailModal = new bootstrap.Modal(document.getElementById('managerChangeEmailModal'));
+
+    document.getElementById('btn-add-manager').addEventListener('click', openAddModal);
+    document.getElementById('manager-form').addEventListener('submit', handleSave);
+    document.getElementById('confirm-delete-manager').addEventListener('click', handleConfirmDelete);
+    document.getElementById('confirm-resend-manager').addEventListener('click', handleConfirmResend);
+    document.getElementById('btn-change-manager-email').addEventListener('click', openChangeEmailModal);
+    document.getElementById('change-email-form').addEventListener('submit', handleChangeEmail);
+
+    document.getElementById('manager-search').addEventListener('input', debounce(function (e) {
+      state.search = e.target.value;
+      state.page = 1;
+      fetchManagers();
+    }, 350));
+
+    document.getElementById('manager-hub-filter').addEventListener('change', function (e) {
+      state.hubId = e.target.value;
+      state.page = 1;
+      fetchManagers();
+    });
+
+    document.getElementById('manager-country-filter').addEventListener('change', function (e) {
+      state.countryId = e.target.value;
+      state.page = 1;
+      fetchManagers();
+    });
+
+    document.getElementById('manager-page-size').addEventListener('change', function (e) {
+      state.pageSize = parseInt(e.target.value, 10);
+      state.page = 1;
+      fetchManagers();
+    });
+
+    document.querySelectorAll('.sortable').forEach(function (th) {
+      th.style.cursor = 'pointer';
+      th.addEventListener('click', function () {
+        var col = th.dataset.sort;
+        if (state.sortBy === col) {
+          state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+          state.sortBy = col;
+          state.sortDir = 'asc';
+        }
+        fetchManagers();
+      });
+    });
+
+    // loadHubOptions/loadCountryOptions (dropdown options) and
+    // fetchManagers (the table data) don't depend on each other's
+    // results — fire all three at once instead of waiting on one before
+    // starting the others.
+    Promise.all([loadHubOptions(), loadCountryOptions(), fetchManagers()]);
+  }
+
+  function loadCountryOptions() {
+    return runServer('getCountryOptions', token()).then(function (res) {
+      var countryOptions = res.success ? res.data : [];
+      document.getElementById('manager-country-filter').innerHTML = '<option value="">All Countries</option>' +
+        countryOptions.map(function (c) { return '<option value="' + c.id + '">' + escapeHtml(c.name) + '</option>'; }).join('');
+    });
+  }
+
+  function loadHubOptions() {
+    return runServer('getHubOptions', token()).then(function (res) {
+      hubOptions = res.success ? res.data : [];
+
+      var filterSelect = document.getElementById('manager-hub-filter');
+      filterSelect.innerHTML = '<option value="">All Hubs</option>' +
+        hubOptions.map(function (h) { return '<option value="' + h.id + '">' + escapeHtml(h.name) + '</option>'; }).join('');
+
+      var formSelect = document.getElementById('manager-hub');
+      formSelect.innerHTML = '<option value="">Select a hub…</option>' +
+        hubOptions.map(function (h) { return '<option value="' + h.id + '">' + escapeHtml(h.name) + '</option>'; }).join('');
+    });
+  }
+
+  function fetchManagers() {
+    var tbody = document.getElementById('managers-table-body');
+    tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">Loading…</td></tr>';
+
+    runServer('getManagers', token(), state).then(function (res) {
+      if (!res.success) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-danger text-center py-4">' + res.message + '</td></tr>';
+        return;
+      }
+      renderTable(res.data.records);
+      renderSummary(res.data.pagination);
+      renderPagination('managers-pagination', res.data.pagination, function (p) {
+        state.page = p;
+        fetchManagers();
+      });
+    }).catch(function (err) {
+      tbody.innerHTML = '<tr><td colspan="7" class="text-danger text-center py-4">' + err.message + '</td></tr>';
+    });
+  }
+
+  function renderTable(records) {
+    var tbody = document.getElementById('managers-table-body');
+    if (!records.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">No hub managers found.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = records.map(function (m) {
+      var statusBadge = m.Status === 'Active' ? 'badge-active' : 'badge-inactive';
+      var accountBadge = m.MustResetPassword
+        ? '<span class="badge badge-inactive" title="Has not set their own password yet">Awaiting setup</span>'
+        : '<span class="badge badge-active" title="Password has been set">Password set</span>';
+      var fullName = (m.FirstName + ' ' + m.LastName).trim();
+      var emailAttr = escapeHtml(m.Email).replace(/'/g, "\\'");
+      var nameAttr = escapeHtml(fullName).replace(/'/g, "\\'");
+
+      var thumb = m.PhotoUrl
+        ? '<img class="beneficiary-thumb" src="' + escapeHtml(m.PhotoUrl) + '" alt="">'
+        : '<span class="beneficiary-thumb-placeholder"><i class="bi bi-person-fill"></i></span>';
+
+      return (
+        '<tr>' +
+          '<td class="fw-medium"><div class="beneficiary-thumb-wrap">' + thumb + '<span>' + escapeHtml(fullName) + '</span></div></td>' +
+          '<td class="text-muted">' + escapeHtml(m.Email) + '</td>' +
+          '<td class="text-muted">' + escapeHtml(m.Phone || '—') + '</td>' +
+          '<td>' + escapeHtml(m.HubName || '—') + '</td>' +
+          '<td>' + accountBadge + '</td>' +
+          '<td><span class="badge ' + statusBadge + '">' + m.Status + '</span></td>' +
+          '<td class="text-end">' +
+            '<button class="btn btn-sm btn-light me-1" onclick="editManager(\'' + emailAttr + '\')" title="Edit"><i class="bi bi-pencil"></i></button>' +
+            '<button class="btn btn-sm btn-light me-1" onclick="promptResendManager(\'' + emailAttr + '\', \'' + nameAttr + '\')" title="Resend credentials"><i class="bi bi-envelope-arrow-up"></i></button>' +
+            '<button class="btn btn-sm btn-light text-danger" onclick="promptDeleteManager(\'' + emailAttr + '\', \'' + nameAttr + '\')" title="Delete"><i class="bi bi-trash"></i></button>' +
+          '</td>' +
+        '</tr>'
+      );
+    }).join('');
+  }
+
+  function renderSummary(p) {
+    var el = document.getElementById('managers-summary');
+    var start = (p.page - 1) * p.pageSize + 1;
+    var end = Math.min(p.page * p.pageSize, p.totalRecords);
+    el.textContent = p.totalRecords === 0 ? 'No records' : ('Showing ' + start + '–' + end + ' of ' + p.totalRecords);
+  }
+
+  function openAddModal() {
+    var form = document.getElementById('manager-form');
+    form.reset();
+    form.classList.remove('was-validated');
+    document.getElementById('manager-original-email').value = '';
+    document.getElementById('manager-email').disabled = false;
+    document.getElementById('manager-email-help').classList.remove('d-none');
+    document.getElementById('btn-change-manager-email').classList.add('d-none');
+    document.getElementById('manager-hub').value = state.hubId || '';
+    document.getElementById('manager-photo-img').classList.add('d-none');
+    document.getElementById('manager-photo-placeholder').classList.remove('d-none');
+    document.getElementById('managerModalLabel').textContent = 'Add Hub Manager';
+    document.getElementById('manager-save-btn').textContent = 'Save Hub Manager';
+    managerModal.show();
+  }
+
+  window.editManager = function (email) {
+    runServer('getManagers', token(), { search: '', page: 1, pageSize: 100000 }).then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      var record = res.data.records.find(function (m) { return m.Email === email; });
+      if (!record) return;
+
+      var photoImg = document.getElementById('manager-photo-img');
+      var photoPlaceholder = document.getElementById('manager-photo-placeholder');
+      if (record.PhotoUrl) {
+        photoImg.src = record.PhotoUrl;
+        photoImg.classList.remove('d-none');
+        photoPlaceholder.classList.add('d-none');
+      } else {
+        photoImg.classList.add('d-none');
+        photoPlaceholder.classList.remove('d-none');
+      }
+
+      document.getElementById('manager-original-email').value = record.Email;
+      document.getElementById('manager-firstname').value = record.FirstName;
+      document.getElementById('manager-lastname').value = record.LastName;
+      document.getElementById('manager-phone').value = record.Phone || '';
+      document.getElementById('manager-email').value = record.Email;
+      document.getElementById('manager-email').disabled = true; // Email is the primary key — immutable after creation; use "Change Email" instead
+      document.getElementById('manager-email-help').classList.add('d-none');
+      document.getElementById('btn-change-manager-email').classList.remove('d-none');
+      document.getElementById('manager-hub').value = record.HubID;
+      document.getElementById('manager-status').value = record.Status;
+      document.getElementById('manager-address').value = record.Address || '';
+      document.getElementById('manager-bankname').value = record.BankName || '';
+      document.getElementById('manager-bankaccountname').value = record.BankAccountName || '';
+      document.getElementById('manager-bankaccountnumber').value = record.BankAccountNumber || '';
+      document.getElementById('manager-mmprovider').value = record.MobileMoneyProvider || '';
+      document.getElementById('manager-mmname').value = record.MobileMoneyName || '';
+      document.getElementById('manager-mmnumber').value = record.MobileMoneyNumber || '';
+      document.getElementById('managerModalLabel').textContent = 'Edit Hub Manager';
+      document.getElementById('manager-save-btn').textContent = 'Save Changes';
+      document.getElementById('manager-form').classList.remove('was-validated');
+      managerModal.show();
+    });
+  };
+
+  function handleSave(e) {
+    e.preventDefault();
+
+    var form = document.getElementById('manager-form');
+    if (!form.checkValidity()) {
+      form.classList.add('was-validated');
+      return;
+    }
+
+    var originalEmail = document.getElementById('manager-original-email').value;
+    var isNew = !originalEmail;
+
+    var data = {
+      FirstName: document.getElementById('manager-firstname').value.trim(),
+      LastName: document.getElementById('manager-lastname').value.trim(),
+      Phone: document.getElementById('manager-phone').value.trim(),
+      Email: document.getElementById('manager-email').value.trim(),
+      HubID: document.getElementById('manager-hub').value,
+      Status: document.getElementById('manager-status').value,
+      Address: document.getElementById('manager-address').value.trim(),
+      BankName: document.getElementById('manager-bankname').value.trim(),
+      BankAccountName: document.getElementById('manager-bankaccountname').value.trim(),
+      BankAccountNumber: document.getElementById('manager-bankaccountnumber').value.trim(),
+      MobileMoneyProvider: document.getElementById('manager-mmprovider').value.trim(),
+      MobileMoneyName: document.getElementById('manager-mmname').value.trim(),
+      MobileMoneyNumber: document.getElementById('manager-mmnumber').value.trim()
+    };
+
+    var saveBtn = document.getElementById('manager-save-btn');
+    saveBtn.disabled = true;
+    saveBtn.textContent = isNew ? 'Creating & emailing…' : 'Saving…';
+
+    var call = isNew ? runServer('addManager', token(), data) : runServer('updateManager', token(), originalEmail, data);
+
+    call.then(function (res) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = isNew ? 'Save Hub Manager' : 'Save Changes';
+      if (!res.success) {
+        showToast(res.message, 'danger');
+        return;
+      }
+      managerModal.hide();
+      showToast(isNew ? 'Hub manager created — a welcome email with login details was sent.' : 'Hub manager updated successfully.', 'success');
+      fetchManagers();
+    }).catch(function (err) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = isNew ? 'Save Hub Manager' : 'Save Changes';
+      showToast(err.message, 'danger');
+    });
+  }
+
+  function openChangeEmailModal() {
+    pendingChangeEmailOldAddress = document.getElementById('manager-original-email').value;
+    document.getElementById('change-email-form').reset();
+    document.getElementById('change-email-current').textContent = pendingChangeEmailOldAddress;
+    changeEmailModal.show();
+  }
+
+  function handleChangeEmail(e) {
+    e.preventDefault();
+    var newEmail = document.getElementById('change-email-new').value.trim();
+    var btn = document.getElementById('change-email-save-btn');
+    btn.disabled = true;
+    btn.textContent = 'Changing…';
+
+    runServer('changeManagerEmail', token(), pendingChangeEmailOldAddress, newEmail).then(function (res) {
+      btn.disabled = false;
+      btn.textContent = 'Change Email';
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      changeEmailModal.hide();
+      managerModal.hide();
+      showToast('Email changed to ' + newEmail + '.', 'success');
+      fetchManagers();
+    }).catch(function (err) {
+      btn.disabled = false;
+      btn.textContent = 'Change Email';
+      showToast(err.message, 'danger');
+    });
+  }
+
+  window.promptDeleteManager = function (email, name) {
+    pendingDeleteEmail = email;
+    document.getElementById('delete-manager-name').textContent = name;
+    deleteModal.show();
+  };
+
+  function handleConfirmDelete() {
+    if (!pendingDeleteEmail) return;
+    runServer('deleteManager', token(), pendingDeleteEmail).then(function (res) {
+      deleteModal.hide();
+      if (!res.success) {
+        showToast(res.message, 'danger');
+        return;
+      }
+      showToast('Hub manager deleted.', 'success');
+      fetchManagers();
+    }).catch(function (err) {
+      deleteModal.hide();
+      showToast(err.message, 'danger');
+    });
+  }
+
+  window.promptResendManager = function (email, name) {
+    pendingResendEmail = email;
+    document.getElementById('resend-manager-name').textContent = name;
+    resendModal.show();
+  };
+
+  function handleConfirmResend() {
+    if (!pendingResendEmail) return;
+    var btn = document.getElementById('confirm-resend-manager');
+    btn.disabled = true;
+    btn.textContent = 'Sending…';
+
+    runServer('resendManagerCredentials', token(), pendingResendEmail).then(function (res) {
+      btn.disabled = false;
+      btn.textContent = 'Resend Credentials';
+      resendModal.hide();
+      if (!res.success) {
+        showToast(res.message, 'danger');
+        return;
+      }
+      showToast('New credentials sent to ' + res.data.Email + '.', 'success');
+      fetchManagers();
+    }).catch(function (err) {
+      btn.disabled = false;
+      btn.textContent = 'Resend Credentials';
+      resendModal.hide();
+      showToast(err.message, 'danger');
+    });
+  }
+})();
+</script>

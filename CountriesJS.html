@@ -1,0 +1,219 @@
+<script>
+(function () {
+  var state = { search: '', sortBy: 'CountryName', sortDir: 'asc', page: 1, pageSize: 10 };
+  var countryModal, deleteModal, pendingDeleteId;
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'countries') return;
+    initCountriesPage();
+  });
+
+  function initCountriesPage() {
+    state = { search: '', sortBy: 'CountryName', sortDir: 'asc', page: 1, pageSize: 10 };
+    countryModal = new bootstrap.Modal(document.getElementById('countryModal'));
+    deleteModal = new bootstrap.Modal(document.getElementById('countryDeleteModal'));
+
+    document.getElementById('btn-add-country').addEventListener('click', openAddModal);
+    document.getElementById('country-form').addEventListener('submit', handleSave);
+    document.getElementById('confirm-delete-country').addEventListener('click', handleConfirmDelete);
+    document.getElementById('btn-save-currency').addEventListener('click', handleSaveCurrency);
+    loadSystemCurrency();
+
+    document.getElementById('country-search').addEventListener('input', debounce(function (e) {
+      state.search = e.target.value;
+      state.page = 1;
+      fetchCountries();
+    }, 350));
+
+    document.getElementById('country-page-size').addEventListener('change', function (e) {
+      state.pageSize = parseInt(e.target.value, 10);
+      state.page = 1;
+      fetchCountries();
+    });
+
+    document.querySelectorAll('.sortable').forEach(function (th) {
+      th.style.cursor = 'pointer';
+      th.addEventListener('click', function () {
+        var col = th.dataset.sort;
+        if (state.sortBy === col) {
+          state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+          state.sortBy = col;
+          state.sortDir = 'asc';
+        }
+        fetchCountries();
+      });
+    });
+
+    fetchCountries();
+  }
+
+  function fetchCountries() {
+    var tbody = document.getElementById('countries-table-body');
+    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">Loading…</td></tr>';
+
+    runServer('getCountries', token(), state).then(function (res) {
+      if (!res.success) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-danger text-center py-4">' + res.message + '</td></tr>';
+        return;
+      }
+      renderTable(res.data.records);
+      renderSummary(res.data.pagination);
+      renderPagination('countries-pagination', res.data.pagination, function (p) {
+        state.page = p;
+        fetchCountries();
+      });
+    }).catch(function (err) {
+      tbody.innerHTML = '<tr><td colspan="5" class="text-danger text-center py-4">' + err.message + '</td></tr>';
+    });
+  }
+
+  function renderTable(records) {
+    var tbody = document.getElementById('countries-table-body');
+    if (!records.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">No countries found.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = records.map(function (c) {
+      var badge = c.Status === 'Active' ? 'badge-active' : 'badge-inactive';
+      return (
+        '<tr>' +
+          '<td class="text-muted">' + c.CountryID + '</td>' +
+          '<td class="fw-medium">' + escapeHtml(c.CountryName) + '</td>' +
+          '<td>' + escapeHtml(c.ISOCode) + '</td>' +
+          '<td><span class="badge ' + badge + '">' + c.Status + '</span></td>' +
+          '<td class="text-end">' +
+            '<button class="btn btn-sm btn-light me-1" onclick="editCountry(\'' + c.CountryID + '\')" title="Edit"><i class="bi bi-pencil"></i></button>' +
+            '<button class="btn btn-sm btn-light text-danger" onclick="promptDeleteCountry(\'' + c.CountryID + '\', \'' + escapeHtml(c.CountryName).replace(/'/g, "\\'") + '\')" title="Delete"><i class="bi bi-trash"></i></button>' +
+          '</td>' +
+        '</tr>'
+      );
+    }).join('');
+  }
+
+  function renderSummary(p) {
+    var el = document.getElementById('countries-summary');
+    var start = (p.page - 1) * p.pageSize + 1;
+    var end = Math.min(p.page * p.pageSize, p.totalRecords);
+    el.textContent = p.totalRecords === 0 ? 'No records' : ('Showing ' + start + '–' + end + ' of ' + p.totalRecords);
+  }
+
+  function openAddModal() {
+    document.getElementById('country-form').reset();
+    document.getElementById('country-id').value = '';
+    document.getElementById('countryModalLabel').textContent = 'Add Country';
+    countryModal.show();
+  }
+
+  window.editCountry = function (id) {
+    runServer('getCountries', token(), { search: '', page: 1, pageSize: 100000 }).then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      var record = res.data.records.find(function (c) { return c.CountryID === id; });
+      if (!record) return;
+      document.getElementById('country-id').value = record.CountryID;
+      document.getElementById('country-name').value = record.CountryName;
+      document.getElementById('country-iso').value = record.ISOCode;
+      document.getElementById('country-status').value = record.Status;
+      document.getElementById('countryModalLabel').textContent = 'Edit Country';
+      countryModal.show();
+    });
+  };
+
+  function handleSave(e) {
+    e.preventDefault();
+
+    var form = document.getElementById('country-form');
+    if (!form.checkValidity()) {
+      form.classList.add('was-validated');
+      return;
+    }
+
+    var id = document.getElementById('country-id').value;
+    var data = {
+      CountryName: document.getElementById('country-name').value.trim(),
+      ISOCode: document.getElementById('country-iso').value.trim().toUpperCase(),
+      Status: document.getElementById('country-status').value
+    };
+
+    var saveBtn = document.getElementById('country-save-btn');
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving…';
+
+    var call = id ? runServer('updateCountry', token(), id, data) : runServer('addCountry', token(), data);
+
+    call.then(function (res) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save Country';
+      if (!res.success) {
+        showToast(res.message, 'danger');
+        return;
+      }
+      countryModal.hide();
+      showToast(id ? 'Country updated successfully.' : 'Country added successfully.', 'success');
+      fetchCountries();
+    }).catch(function (err) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save Country';
+      showToast(err.message, 'danger');
+    });
+  }
+
+  window.promptDeleteCountry = function (id, name) {
+    pendingDeleteId = id;
+    document.getElementById('delete-country-name').textContent = name;
+    deleteModal.show();
+  };
+
+  function handleConfirmDelete() {
+    if (!pendingDeleteId) return;
+    runServer('deleteCountry', token(), pendingDeleteId).then(function (res) {
+      deleteModal.hide();
+      if (!res.success) {
+        showToast(res.message, 'danger');
+        return;
+      }
+      showToast('Country deleted.', 'success');
+      fetchCountries();
+    }).catch(function (err) {
+      deleteModal.hide();
+      showToast(err.message, 'danger');
+    });
+  }
+
+  // ---------- System currency ----------
+  function loadSystemCurrency() {
+    var token = localStorage.getItem(MNE_SESSION_KEY);
+    runServer('getSystemCurrency', token).then(function (res) {
+      if (!res.success) return;
+      var select = document.getElementById('system-currency-select');
+      select.innerHTML = res.data.catalog.map(function (c) {
+        return '<option value="' + c.code + '">' + c.code + ' — ' + escapeHtml(c.name) + ' (' + c.symbol + ')</option>';
+      }).join('');
+      select.value = res.data.code;
+      window.MNE_CURRENCY = { code: res.data.code, symbol: res.data.symbol };
+    });
+  }
+
+  function handleSaveCurrency() {
+    var token = localStorage.getItem(MNE_SESSION_KEY);
+    var code = document.getElementById('system-currency-select').value;
+    var statusEl = document.getElementById('currency-save-status');
+    var btn = document.getElementById('btn-save-currency');
+    btn.disabled = true;
+    runServer('setSystemCurrency', token, code).then(function (res) {
+      btn.disabled = false;
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      window.MNE_CURRENCY = res.data;
+      statusEl.textContent = 'Saved.';
+      showToast('System currency updated.', 'success');
+      setTimeout(function () { statusEl.textContent = ''; }, 2500);
+    }).catch(function (err) {
+      btn.disabled = false;
+      showToast(err.message, 'danger');
+    });
+  }
+})();
+</script>

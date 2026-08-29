@@ -1,0 +1,93 @@
+<div class="page-header">
+  <div>
+    <h4>Usage Overview</h4>
+    <p>Global reach, digital usage, and Hub comparison — this month</p>
+  </div>
+</div>
+
+<div class="pill-tabs animate-float-up">
+  <button type="button" class="pill-tab active" data-tab="overview">Overview</button>
+  <button type="button" class="pill-tab" data-tab="dataquality">Data Quality</button>
+  <button type="button" class="pill-tab" data-tab="aiinsights">AI Insights</button>
+  <button type="button" class="pill-tab" data-tab="feedback">Feedback</button>
+</div>
+
+<div class="usage-pane" id="pane-overview">
+  <div class="toolbar mb-3">
+    <select class="form-select w-auto" id="overview-country-filter"><option value="">All Countries</option></select>
+  </div>
+  <div class="stat-grid mb-3" id="overview-stats">
+    <div class="stat-tile" style="background:linear-gradient(135deg,#6366f1,#8b5cf6)">
+      <i class="bi bi-geo-alt stat-icon"></i>
+      <div class="stat-value" id="ov-hubs">&mdash;</div>
+      <div class="stat-label">Hubs</div>
+    </div>
+    <div class="stat-tile" style="background:linear-gradient(135deg,#0ea5e9,#06b6d4)">
+      <i class="bi bi-people stat-icon"></i>
+      <div class="stat-value" id="ov-uniqueusers">&mdash;</div>
+      <div class="stat-label">Unique Users</div>
+    </div>
+    <div class="stat-tile" style="background:linear-gradient(135deg,#f43f5e,#fb7185)">
+      <i class="bi bi-door-open stat-icon"></i>
+      <div class="stat-value" id="ov-totalvisits">&mdash;</div>
+      <div class="stat-label">Total Visits</div>
+    </div>
+    <div class="stat-tile" style="background:linear-gradient(135deg,#10b981,#34d399)">
+      <i class="bi bi-pc-display stat-icon"></i>
+      <div class="stat-value" id="ov-computerhours">&mdash;</div>
+      <div class="stat-label">Computer Hours</div>
+    </div>
+  </div>
+
+  <div class="card-surface mb-3">
+    <h6 class="mb-3">Hub Comparison — <span id="ov-period-label"></span></h6>
+    <div class="row mb-3">
+      <div class="col-md-3"><div class="small text-muted">Most Active</div><div class="fw-medium" id="ov-most-active">&mdash;</div></div>
+      <div class="col-md-3"><div class="small text-muted">Least Active</div><div class="fw-medium" id="ov-least-active">&mdash;</div></div>
+      <div class="col-md-3"><div class="small text-muted">Highest Utilization</div><div class="fw-medium" id="ov-highest-util">&mdash;</div></div>
+      <div class="col-md-3"><div class="small text-muted">Lowest Utilization</div><div class="fw-medium" id="ov-lowest-util">&mdash;</div></div>
+    </div>
+    <div class="table-responsive">
+      <table class="table align-middle">
+        <thead><tr><th>Hub</th><th>Unique Users</th><th>Total Visits</th><th>Computer Hours</th><th>Utilization</th></tr></thead>
+        <tbody id="hub-comparison-table-body"><tr><td colspan="5" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="usage-pane d-none" id="pane-dataquality">
+  <div class="card-surface">
+    <div class="toolbar mb-3">
+      <h6 class="mb-0 flex-grow-1">Open Data Quality Issues</h6>
+      <select class="form-select w-auto" id="dq-hub-filter"><option value="">All Hubs</option></select>
+    </div>
+    <div id="dataquality-list"><p class="text-muted text-center py-4">Loading…</p></div>
+  </div>
+</div>
+
+<div class="usage-pane d-none" id="pane-aiinsights">
+  <div class="card-surface mb-3">
+    <div class="toolbar mb-3">
+      <h6 class="mb-0 flex-grow-1">Generate a Summary</h6>
+      <select class="form-select w-auto" id="ai-hub-select"><option value="">Global (all Hubs)</option></select>
+      <button class="btn btn-primary" id="btn-generate-insight"><i class="bi bi-stars"></i> Generate</button>
+    </div>
+    <p class="small text-muted mb-0">Uses only aggregate KPI numbers — no beneficiary names or row-level data are ever sent. Every narrative is labelled AI-generated and shown with its source numbers so you can verify it before using it externally.</p>
+  </div>
+  <div id="ai-insights-list"><p class="text-muted text-center py-4">Loading…</p></div>
+</div>
+
+<div class="usage-pane d-none" id="pane-feedback">
+  <div class="card-surface">
+    <div class="toolbar mb-3">
+      <h6 class="mb-0 flex-grow-1">Beneficiary Feedback</h6>
+      <select class="form-select w-auto" id="feedback-hub-filter"><option value="">All Hubs</option></select>
+    </div>
+    <div id="feedback-list"><p class="text-muted text-center py-4">Loading…</p></div>
+    <div class="d-flex justify-content-between align-items-center mt-3">
+      <small class="text-muted" id="feedback-summary"></small>
+      <div id="feedback-pagination"></div>
+    </div>
+  </div>
+</div>

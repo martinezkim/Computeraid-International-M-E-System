@@ -1,0 +1,204 @@
+<script>
+(function () {
+  var visitsState = { search: '', hubId: '', countryId: '', sortBy: 'Date', sortDir: 'desc', page: 1, pageSize: 10 };
+  var sessionsState = { hubId: '', countryId: '', sortBy: 'LoginTime', sortDir: 'desc', page: 1, pageSize: 10 };
+  var activeTab = 'visits';
+
+  var VISIT_EXPORT_COLUMNS = [
+    { key: 'Date', label: 'Date' }, { key: 'HubName', label: 'Hub' },
+    { key: 'BeneficiaryFirstName', label: 'Beneficiary' }, { key: 'ArrivalTime', label: 'Arrival' },
+    { key: 'DepartureTime', label: 'Departure' }, { key: 'DurationMinutes', label: 'Duration (min)' },
+    { key: 'VisitorType', label: 'Visitor Type' },
+    { key: 'ActivityNames', label: 'Activities' }, { key: 'ComputerUsed', label: 'Computer Used' }
+  ];
+
+  var SESSION_EXPORT_COLUMNS = [
+    { key: 'HubName', label: 'Hub' }, { key: 'ComputerID', label: 'Computer' },
+    { key: 'BeneficiaryFirstName', label: 'Beneficiary' }, { key: 'LoginTime', label: 'Login' },
+    { key: 'LogoutTime', label: 'Logout' }, { key: 'DurationMinutes', label: 'Duration (min)' },
+    { key: 'EntryMethod', label: 'Entry Method' }, { key: 'Status', label: 'Status' }
+  ];
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'hubusage') return;
+    if (!window.MNE_CURRENT_USER || window.MNE_CURRENT_USER.role !== 'Admin') return;
+    initHubUsagePage();
+  });
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  function initHubUsagePage() {
+    visitsState = { search: '', hubId: '', countryId: '', sortBy: 'Date', sortDir: 'desc', page: 1, pageSize: 10 };
+    sessionsState = { hubId: '', countryId: '', sortBy: 'LoginTime', sortDir: 'desc', page: 1, pageSize: 10 };
+    activeTab = 'visits';
+
+    document.querySelectorAll('.pill-tab').forEach(function (tab) {
+      tab.addEventListener('click', function () { switchTab(tab.dataset.tab); });
+    });
+
+    document.getElementById('visits-search').addEventListener('input', debounce(function (e) {
+      visitsState.search = e.target.value; visitsState.page = 1; fetchVisits();
+    }, 350));
+    document.getElementById('visits-hub-filter').addEventListener('change', function (e) {
+      visitsState.hubId = e.target.value; visitsState.page = 1; fetchVisits();
+    });
+    document.getElementById('visits-country-filter').addEventListener('change', function (e) {
+      visitsState.countryId = e.target.value; visitsState.page = 1; fetchVisits();
+    });
+
+    document.getElementById('computers-hub-filter').addEventListener('change', fetchComputers);
+    document.getElementById('computers-country-filter').addEventListener('change', fetchComputers);
+    document.getElementById('sessions-hub-filter').addEventListener('change', function (e) {
+      sessionsState.hubId = e.target.value; sessionsState.page = 1; fetchSessions();
+    });
+    document.getElementById('sessions-country-filter').addEventListener('change', function (e) {
+      sessionsState.countryId = e.target.value; sessionsState.page = 1; fetchSessions();
+    });
+
+    document.querySelectorAll('[data-format]').forEach(function (link) {
+      link.addEventListener('click', function (e) { e.preventDefault(); runExport(link.dataset.format); });
+    });
+
+    Promise.all([loadHubOptions(), loadCountryOptions()]).then(fetchVisits);
+  }
+
+  function switchTab(tabKey) {
+    activeTab = tabKey;
+    document.querySelectorAll('.pill-tab').forEach(function (t) { t.classList.toggle('active', t.dataset.tab === tabKey); });
+    document.querySelectorAll('.usage-pane').forEach(function (p) { p.classList.add('d-none'); });
+    document.getElementById('pane-' + tabKey).classList.remove('d-none');
+    if (tabKey === 'computerusage' && !computerUsageLoaded) {
+      computerUsageLoaded = true;
+      fetchComputers();
+      fetchSessions();
+    }
+  }
+  var computerUsageLoaded = false;
+
+  function loadHubOptions() {
+    return runServer('getHubOptions', token()).then(function (res) {
+      if (!res.success) return;
+      var opts = res.data.map(function (h) { return '<option value="' + h.id + '">' + escapeHtml(h.name) + '</option>'; }).join('');
+      document.getElementById('visits-hub-filter').innerHTML = '<option value="">All Hubs</option>' + opts;
+      document.getElementById('computers-hub-filter').innerHTML = '<option value="">All Hubs</option>' + opts;
+      document.getElementById('sessions-hub-filter').innerHTML = '<option value="">All Hubs</option>' + opts;
+    });
+  }
+
+  function loadCountryOptions() {
+    return runServer('getCountryOptions', token()).then(function (res) {
+      if (!res.success) return;
+      var opts = res.data.map(function (c) { return '<option value="' + c.id + '">' + escapeHtml(c.name) + '</option>'; }).join('');
+      document.getElementById('visits-country-filter').innerHTML = '<option value="">All Countries</option>' + opts;
+      document.getElementById('computers-country-filter').innerHTML = '<option value="">All Countries</option>' + opts;
+      document.getElementById('sessions-country-filter').innerHTML = '<option value="">All Countries</option>' + opts;
+    });
+  }
+
+  // ---------- Visits ----------
+  function fetchVisits() {
+    var tbody = document.getElementById('visits-table-body');
+    tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">Loading…</td></tr>';
+    runServer('getAllVisits', token(), visitsState).then(function (res) {
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="8" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      renderVisitsTable(res.data.records);
+      renderSummary('visits-summary', res.data.pagination);
+      renderPagination('visits-pagination', res.data.pagination, function (p) { visitsState.page = p; fetchVisits(); });
+    });
+  }
+
+  function renderVisitsTable(records) {
+    var tbody = document.getElementById('visits-table-body');
+    if (!records.length) { tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">No visits found.</td></tr>'; return; }
+    tbody.innerHTML = records.map(function (v) {
+      return '<tr>' +
+        '<td>' + escapeHtml(v.Date) + '</td>' +
+        '<td>' + escapeHtml(v.HubName || '') + '</td>' +
+        '<td class="fw-medium">' + escapeHtml(v.BeneficiaryFirstName || '') + '</td>' +
+        '<td>' + escapeHtml(v.ArrivalTime) + '</td>' +
+        '<td>' + (v.DepartureTime ? escapeHtml(v.DepartureTime) : '&mdash;') + '</td>' +
+        '<td>' + (v.DurationMinutes !== '' ? v.DurationMinutes + ' min' : '&mdash;') + '</td>' +
+        '<td class="small text-muted">' + escapeHtml(v.ActivityNames || '') + '</td>' +
+        '<td>' + (v.ComputerUsed === true || v.ComputerUsed === 'true' ? '<i class="bi bi-check-lg text-success"></i>' : '') + '</td>' +
+      '</tr>';
+    }).join('');
+  }
+
+  // ---------- Computer Usage ----------
+  function fetchComputers() {
+    var tbody = document.getElementById('computers-table-body');
+    tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-4">Loading…</td></tr>';
+    var hubId = document.getElementById('computers-hub-filter').value;
+    var countryId = document.getElementById('computers-country-filter').value;
+    runServer('getAllComputers', token(), hubId, countryId).then(function (res) {
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="4" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      if (!res.data.length) { tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-4">No computers registered yet.</td></tr>'; return; }
+      tbody.innerHTML = res.data.map(function (c) {
+        var badge = c.Status === 'In Use' ? 'badge-status-inuse' : (c.Status === 'Faulty' ? 'badge-status-faulty' : 'badge-status-instorage');
+        return '<tr>' +
+          '<td class="text-muted">' + c.ComputerID + '</td>' +
+          '<td>' + escapeHtml(c.HubName || '') + '</td>' +
+          '<td class="fw-medium">' + escapeHtml(c.ItemName) + '</td>' +
+          '<td><span class="badge ' + badge + '">' + escapeHtml(c.Status) + '</span></td>' +
+        '</tr>';
+      }).join('');
+    });
+  }
+
+  function fetchSessions() {
+    var tbody = document.getElementById('sessions-table-body');
+    tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">Loading…</td></tr>';
+    runServer('getAllComputerSessions', token(), sessionsState).then(function (res) {
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="7" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      renderSessions(res.data.records);
+      renderSummary('sessions-summary', res.data.pagination);
+      renderPagination('sessions-pagination', res.data.pagination, function (pg) { sessionsState.page = pg; fetchSessions(); });
+    });
+  }
+
+  function renderSessions(records) {
+    var tbody = document.getElementById('sessions-table-body');
+    if (!records.length) { tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">No sessions found.</td></tr>'; return; }
+    tbody.innerHTML = records.map(function (s) {
+      return '<tr>' +
+        '<td>' + escapeHtml(s.HubName || '') + '</td>' +
+        '<td>' + s.ComputerID + '</td>' +
+        '<td class="fw-medium">' + escapeHtml(s.BeneficiaryFirstName || '') + '</td>' +
+        '<td>' + formatDateTimeShort_(s.LoginTime) + '</td>' +
+        '<td>' + (s.LogoutTime ? formatDateTimeShort_(s.LogoutTime) : '&mdash;') + '</td>' +
+        '<td>' + (s.DurationMinutes !== '' ? s.DurationMinutes + ' min' : '&mdash;') + '</td>' +
+        '<td><span class="badge ' + (s.Status === 'Open' ? 'bg-warning text-dark' : 'badge-active') + '">' + s.Status + '</span></td>' +
+      '</tr>';
+    }).join('');
+  }
+
+  function formatDateTimeShort_(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return escapeHtml(iso);
+    return d.toLocaleString();
+  }
+
+  function renderSummary(elId, p) {
+    var el = document.getElementById(elId);
+    var start = (p.page - 1) * p.pageSize + 1;
+    var end = Math.min(p.page * p.pageSize, p.totalRecords);
+    el.textContent = p.totalRecords === 0 ? 'No records' : ('Showing ' + start + '–' + end + ' of ' + p.totalRecords);
+  }
+
+  function runExport(format) {
+    if (activeTab === 'computerusage') {
+      runServer('getAllComputerSessions', token(), { hubId: sessionsState.hubId, countryId: sessionsState.countryId, page: 1, pageSize: 100000 }).then(function (res) {
+        if (!res.success) { showToast(res.message, 'danger'); return; }
+        exportRecordsToFile(res.data.records, SESSION_EXPORT_COLUMNS, format, 'ComputerSessions_' + new Date().toISOString().slice(0, 10));
+      });
+      return;
+    }
+    runServer('getAllVisits', token(), { search: visitsState.search, hubId: visitsState.hubId, countryId: visitsState.countryId, page: 1, pageSize: 100000 }).then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      exportRecordsToFile(res.data.records, VISIT_EXPORT_COLUMNS, format, 'HubVisits_' + new Date().toISOString().slice(0, 10));
+    });
+  }
+
+})();
+</script>

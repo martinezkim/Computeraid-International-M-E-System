@@ -1,0 +1,74 @@
+<div class="page-header">
+  <div>
+    <h4>Hub Usage</h4>
+    <p>Every Hub Visit and computer session, across every Hub</p>
+  </div>
+  <div class="dropdown">
+    <button class="btn btn-light dropdown-toggle" data-bs-toggle="dropdown"><i class="bi bi-download"></i> Export</button>
+    <ul class="dropdown-menu">
+      <li><a class="dropdown-item" href="#" data-format="csv">CSV</a></li>
+      <li><a class="dropdown-item" href="#" data-format="xlsx">Excel</a></li>
+      <li><a class="dropdown-item" href="#" data-format="pdf">PDF</a></li>
+    </ul>
+  </div>
+</div>
+
+<div class="pill-tabs animate-float-up">
+  <button type="button" class="pill-tab active" data-tab="visits">Individual Visits</button>
+  <button type="button" class="pill-tab" data-tab="computerusage">Computer Usage</button>
+</div>
+
+<!-- Individual Visits -->
+<div class="card-surface usage-pane" id="pane-visits">
+  <div class="toolbar mb-3">
+    <div class="search-box">
+      <i class="bi bi-search"></i>
+      <input type="text" class="form-control" id="visits-search" placeholder="Search by notes…">
+    </div>
+    <select class="form-select w-auto" id="visits-country-filter"><option value="">All Countries</option></select>
+    <select class="form-select w-auto" id="visits-hub-filter"><option value="">All Hubs</option></select>
+  </div>
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Date</th><th>Hub</th><th>Beneficiary</th><th>Arrival</th><th>Departure</th><th>Duration</th><th>Activities</th><th>PC Used</th></tr></thead>
+      <tbody id="visits-table-body"><tr><td colspan="8" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+  <div class="d-flex justify-content-between align-items-center mt-2">
+    <small class="text-muted" id="visits-summary"></small>
+    <div id="visits-pagination"></div>
+  </div>
+</div>
+
+<!-- Computer Usage -->
+<div class="card-surface usage-pane d-none" id="pane-computerusage">
+  <div class="mb-4">
+    <div class="toolbar mb-3">
+      <h6 class="mb-0 flex-grow-1">Computer Registry</h6>
+      <select class="form-select w-auto" id="computers-country-filter"><option value="">All Countries</option></select>
+      <select class="form-select w-auto" id="computers-hub-filter"><option value="">All Hubs</option></select>
+    </div>
+    <div class="table-responsive">
+      <table class="table align-middle">
+        <thead><tr><th>Computer</th><th>Hub</th><th>Item</th><th>Status</th></tr></thead>
+        <tbody id="computers-table-body"><tr><td colspan="4" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="toolbar mb-3">
+    <h6 class="mb-0 flex-grow-1">Sessions</h6>
+    <select class="form-select w-auto" id="sessions-country-filter"><option value="">All Countries</option></select>
+    <select class="form-select w-auto" id="sessions-hub-filter"><option value="">All Hubs</option></select>
+  </div>
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Hub</th><th>Computer</th><th>Beneficiary</th><th>Login</th><th>Logout</th><th>Duration</th><th>Status</th></tr></thead>
+      <tbody id="sessions-table-body"><tr><td colspan="7" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+  <div class="d-flex justify-content-between align-items-center mt-2">
+    <small class="text-muted" id="sessions-summary"></small>
+    <div id="sessions-pagination"></div>
+  </div>
+</div>

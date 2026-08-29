@@ -1,0 +1,138 @@
+<div class="page-header">
+  <div>
+    <h4>Beneficiaries</h4>
+    <p>Look up returning visitors — new registrations happen on the kiosk tablet</p>
+  </div>
+  <div class="d-flex gap-2">
+    <button class="btn btn-light" id="btn-find-beneficiary"><i class="bi bi-search"></i> Find Beneficiary</button>
+  </div>
+</div>
+
+<div class="card-surface mb-3">
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <h6 class="mb-0">Registrations by Quarter</h6>
+    <select class="form-select w-auto" id="mybeneficiaries-bands-year"></select>
+  </div>
+  <div class="mini-stat-grid" id="mybeneficiaries-bands-grid">
+    <div class="text-muted small">Select a Project Year to see registration counts per quarter.</div>
+  </div>
+</div>
+
+<div class="card-surface">
+  <div class="toolbar mb-3">
+    <div class="search-box">
+      <i class="bi bi-search"></i>
+      <input type="text" class="form-control" id="mybeneficiaries-search" placeholder="Search registered beneficiaries…">
+    </div>
+    <select class="form-select w-auto" id="mybeneficiaries-page-size">
+      <option value="10">10 / page</option>
+      <option value="25">25 / page</option>
+      <option value="50">50 / page</option>
+    </select>
+  </div>
+
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Name</th>
+          <th>Age Group</th>
+          <th>Gender</th>
+          <th>Location</th>
+          <th>Registered</th>
+        </tr>
+      </thead>
+      <tbody id="mybeneficiaries-table-body"><tr><td colspan="6" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="d-flex justify-content-between align-items-center mt-2">
+    <small class="text-muted" id="mybeneficiaries-summary"></small>
+    <div id="mybeneficiaries-pagination"></div>
+  </div>
+</div>
+
+<!-- Find Beneficiary (org-wide lookup) Modal -->
+<div class="modal fade" id="findBeneficiaryModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Find Beneficiary</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted small">Search across every Hub — a beneficiary may be registered elsewhere. Enter an ID/QR code for an exact match, or a name + age group to search.</p>
+        <div class="mb-2">
+          <label class="form-label">Beneficiary ID or QR code</label>
+          <input type="text" class="form-control" id="find-exact-id" placeholder="e.g. SCH-BEN-000456">
+        </div>
+        <div class="text-center text-muted small my-2">— or —</div>
+        <div class="row">
+          <div class="col mb-2">
+            <label class="form-label">First Name</label>
+            <input type="text" class="form-control" id="find-firstname">
+          </div>
+          <div class="col-4 mb-2">
+            <label class="form-label">Surname Initial</label>
+            <input type="text" class="form-control" id="find-surnameinitial" maxlength="1">
+          </div>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Age Group</label>
+          <select class="form-select" id="find-agegroup"><option value="">Any</option></select>
+        </div>
+        <button type="button" class="btn btn-primary w-100 mb-3" id="btn-run-find">Search</button>
+        <div id="find-results"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Beneficiary Detail Modal -->
+<div class="modal fade" id="mybenDetailModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Beneficiary Details</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="text-center mb-3">
+          <img id="mybendetail-photo-img" class="bendetail-photo" style="display:none;" alt="">
+          <div id="mybendetail-photo-placeholder" class="bendetail-photo bendetail-photo-placeholder"><i class="bi bi-person-fill"></i></div>
+          <h4 class="mt-2 mb-0" id="mybendetail-name">—</h4>
+          <div class="text-muted small" id="mybendetail-id">—</div>
+        </div>
+        <div id="mybendetail-fields" class="bendetail-grid"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-danger me-auto" id="btn-mybendetail-delete"><i class="bi bi-trash"></i> Delete Beneficiary</button>
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div class="modal fade" id="mybenDeleteModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Delete Beneficiary</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p>Are you sure you want to delete <strong id="mybendelete-name"></strong>? This cannot be undone.</p>
+        <div id="mybendelete-dependents" class="alert alert-warning d-none"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-danger" id="confirm-mybendelete">Delete</button>
+      </div>
+    </div>
+  </div>
+</div>

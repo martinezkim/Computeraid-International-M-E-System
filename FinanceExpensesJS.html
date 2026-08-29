@@ -1,0 +1,614 @@
+<script>
+(function () {
+  var detailModal, reasonModal, paidModal, reimbApproveModal;
+  var salaryModal, salaryDetailModal, salaryCancelModal, salaryPaidModal;
+  var expensesState = { hubId: '', countryId: '', status: '', page: 1, pageSize: 10 };
+  var reimbState = { hubId: '', countryId: '', status: '', page: 1, pageSize: 10 };
+  var invoicesState = { search: '', hubId: '', countryId: '', status: '', page: 1, pageSize: 10 };
+  var salariesState = { hubId: '', countryId: '', month: '', page: 1, pageSize: 10 };
+  var recordCache = {}; // 'expense:ID' / 'reimbursement:ID' / 'invoice:ID' -> record
+  var salaryCache = {};
+  var pendingDetail; // { kind, id }
+  var pendingReason; // { kind, action: 'reject'|'return'|'cancel', id }
+  var pendingPay; // { kind, id }
+  var pendingApprove; // { id } (reimbursement only)
+  var hubOptionsCache = [];
+  var projectOptionsCache = [];
+  var accountOptionsCache = [];
+  var staffOptionsCache = [];
+  var salaryDocUpload;
+  var pendingSalaryCancelId, pendingSalaryPayId;
+
+  var EXPENSE_FIELDS = [
+    ['PayeeName', 'Payee'], ['ExpenseCategory', 'Category'], ['Description', 'Description'],
+    ['Date', 'Date'], ['HubName', 'Hub'], ['AccountName', 'Account'], ['PaymentMethod', 'Payment Method'],
+    ['SubmittedByEmail', 'Submitted By'], ['ApprovalDate', 'Approval Date'],
+    ['PaymentDate', 'Payment Date'], ['PaymentReference', 'Payment Reference'], ['Notes', 'Notes']
+  ];
+  var REIMBURSEMENT_FIELDS = [
+    ['StaffName', 'Staff'], ['ExpenseCategory', 'Category'], ['ActivityRef', 'Activity'], ['Description', 'Description'],
+    ['Reason', 'Reason'], ['Date', 'Date'], ['HubName', 'Hub'], ['AccountName', 'Account'], ['PaymentMethod', 'Payment Method'],
+    ['ApprovalDate', 'Approval Date'], ['PaymentDate', 'Payment Date'], ['PaymentReference', 'Payment Reference']
+  ];
+  var INVOICE_FIELDS = [
+    ['InvoiceNumber', 'Invoice #'], ['SupplierName', 'Payee'], ['SupplierContact', 'Payee Contact'],
+    ['SupplierInvoiceRef', 'Reference'], ['HubName', 'Hub'], ['ExpenseCategory', 'Category'],
+    ['Description', 'Description'], ['InvoiceDate', 'Invoice Date'],
+    ['AccountName', 'Account'], ['PaymentMethod', 'Payment Method'],
+    ['SubmittedByEmail', 'Submitted By'], ['DateSubmitted', 'Date Submitted'],
+    ['ReviewedByEmail', 'Reviewed By'], ['ApprovalDate', 'Approval Date'],
+    ['PaymentDate', 'Payment Date'], ['PaymentReference', 'Payment Reference'], ['Notes', 'Notes']
+  ];
+  var SALARY_DETAIL_FIELDS = [
+    ['StaffName', 'Staff'], ['HubName', 'Hub'], ['Month', 'Month'], ['AccountName', 'Account'],
+    ['ApprovalDate', 'Approval Date'], ['PaymentDate', 'Payment Date'], ['PaymentReference', 'Payment Reference']
+  ];
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'expenses') return;
+    if (!window.MNE_CURRENT_USER || window.MNE_CURRENT_USER.role !== 'Admin') return;
+    initFinanceExpensesPage();
+  });
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  function initFinanceExpensesPage() {
+    expensesState = { hubId: '', countryId: '', status: '', page: 1, pageSize: 10 };
+    reimbState = { hubId: '', countryId: '', status: '', page: 1, pageSize: 10 };
+    invoicesState = { search: '', hubId: '', countryId: '', status: '', page: 1, pageSize: 10 };
+    salariesState = { hubId: '', countryId: '', month: '', page: 1, pageSize: 10 };
+
+    detailModal = new bootstrap.Modal(document.getElementById('financeRecordDetailModal'));
+    reasonModal = new bootstrap.Modal(document.getElementById('financeRecordReasonModal'));
+    paidModal = new bootstrap.Modal(document.getElementById('financeRecordPaidModal'));
+    reimbApproveModal = new bootstrap.Modal(document.getElementById('reimbursementApproveModal'));
+    salaryModal = new bootstrap.Modal(document.getElementById('salaryModal'));
+    salaryDetailModal = new bootstrap.Modal(document.getElementById('salaryDetailModal'));
+    salaryCancelModal = new bootstrap.Modal(document.getElementById('salaryCancelModal'));
+    salaryPaidModal = new bootstrap.Modal(document.getElementById('salaryPaidModal'));
+
+    document.querySelectorAll('.pill-tab').forEach(function (tab) {
+      tab.addEventListener('click', function () { switchTab(tab.dataset.tab); });
+    });
+
+    document.getElementById('expenses-hub-filter').addEventListener('change', function (e) { expensesState.hubId = e.target.value; expensesState.page = 1; fetchExpenses(); });
+    document.getElementById('expenses-country-filter').addEventListener('change', function (e) { expensesState.countryId = e.target.value; expensesState.page = 1; fetchExpenses(); });
+    document.getElementById('expenses-status-filter').addEventListener('change', function (e) { applyStatusFilter(expensesState, e.target.value); fetchExpenses(); });
+    document.getElementById('reimbursements-hub-filter').addEventListener('change', function (e) { reimbState.hubId = e.target.value; reimbState.page = 1; fetchReimbursements(); });
+    document.getElementById('reimbursements-country-filter').addEventListener('change', function (e) { reimbState.countryId = e.target.value; reimbState.page = 1; fetchReimbursements(); });
+    document.getElementById('reimbursements-status-filter').addEventListener('change', function (e) { applyStatusFilter(reimbState, e.target.value); fetchReimbursements(); });
+    document.getElementById('invoices-search').addEventListener('input', debounce(function (e) { invoicesState.search = e.target.value; invoicesState.page = 1; fetchInvoices(); }, 350));
+    document.getElementById('invoices-hub-filter').addEventListener('change', function (e) { invoicesState.hubId = e.target.value; invoicesState.page = 1; fetchInvoices(); });
+    document.getElementById('invoices-country-filter').addEventListener('change', function (e) { invoicesState.countryId = e.target.value; invoicesState.page = 1; fetchInvoices(); });
+    document.getElementById('invoices-status-filter').addEventListener('change', function (e) { applyStatusFilter(invoicesState, e.target.value); fetchInvoices(); });
+
+    document.getElementById('confirm-financerecord-reason').addEventListener('click', handleConfirmReason);
+    document.getElementById('confirm-financerecord-paid').addEventListener('click', handleConfirmPaid);
+    document.getElementById('confirm-reimbursement-approve').addEventListener('click', handleConfirmApproveReimbursement);
+
+    // ---- Salaries tab wiring ----
+    document.getElementById('btn-add-salary').addEventListener('click', openAddSalary);
+    document.getElementById('salary-form').addEventListener('submit', handleSaveSalary);
+    document.getElementById('salary-staffid').addEventListener('change', autoFillHubFromStaff);
+    document.getElementById('salaries-hub-filter').addEventListener('change', function (e) { salariesState.hubId = e.target.value; salariesState.page = 1; fetchSalaries(); });
+    document.getElementById('salaries-country-filter').addEventListener('change', function (e) { salariesState.countryId = e.target.value; salariesState.page = 1; fetchSalaries(); });
+    document.getElementById('salaries-month-filter').addEventListener('change', function (e) { salariesState.month = e.target.value; salariesState.page = 1; fetchSalaries(); });
+    document.getElementById('btn-clear-month-filter').addEventListener('click', function () {
+      document.getElementById('salaries-month-filter').value = '';
+      salariesState.month = ''; salariesState.page = 1; fetchSalaries();
+    });
+    document.getElementById('confirm-salary-cancel').addEventListener('click', handleConfirmSalaryCancel);
+    document.getElementById('confirm-salary-paid').addEventListener('click', handleConfirmSalaryPaid);
+    salaryDocUpload = initFinanceDocumentUpload({ inputId: 'salary-document-input', statusId: 'salary-document-status', documentType: 'Payroll' });
+
+    // Sequential, not Promise.all — Apps Script queues concurrent doPost
+    // executions against the same deployment rather than truly running
+    // them in parallel, so 4-at-once measurably compounds into a much
+    // longer worst-case wait than the same 4 calls run one after another.
+    loadHubOptions().then(loadCountryOptions).then(loadProjectOptions).then(loadAccountOptions).then(loadStaffOptions).then(fetchExpenses);
+  }
+
+  function applyStatusFilter(state, value) {
+    state.page = 1;
+    state.pendingOnly = value === 'pending';
+    state.status = value === 'pending' ? '' : value;
+  }
+
+  function loadHubOptions() {
+    return runServer('getHubOptions', token()).then(function (res) {
+      if (!res.success) return;
+      hubOptionsCache = res.data;
+      var opts = hubOptionsCache.map(function (h) { return '<option value="' + h.id + '">' + escapeHtml(h.name) + '</option>'; }).join('');
+      document.getElementById('expenses-hub-filter').innerHTML = '<option value="">All Hubs</option>' + opts;
+      document.getElementById('reimbursements-hub-filter').innerHTML = '<option value="">All Hubs</option>' + opts;
+      document.getElementById('invoices-hub-filter').innerHTML = '<option value="">All Hubs</option>' + opts;
+      document.getElementById('salaries-hub-filter').innerHTML = '<option value="">All Hubs</option>' + opts;
+      document.getElementById('salary-hubid').innerHTML = opts;
+    });
+  }
+
+  function loadCountryOptions() {
+    return runServer('getCountryOptions', token()).then(function (res) {
+      if (!res.success) return;
+      var opts = res.data.map(function (c) { return '<option value="' + c.id + '">' + escapeHtml(c.name) + '</option>'; }).join('');
+      document.getElementById('expenses-country-filter').innerHTML = '<option value="">All Countries</option>' + opts;
+      document.getElementById('reimbursements-country-filter').innerHTML = '<option value="">All Countries</option>' + opts;
+      document.getElementById('invoices-country-filter').innerHTML = '<option value="">All Countries</option>' + opts;
+      document.getElementById('salaries-country-filter').innerHTML = '<option value="">All Countries</option>' + opts;
+    });
+  }
+
+  function loadProjectOptions() {
+    return runServer('getProjectOptions', token()).then(function (res) {
+      if (!res.success) return;
+      projectOptionsCache = res.data;
+      document.getElementById('salary-projectid').innerHTML = '<option value="">— None —</option>' +
+        projectOptionsCache.map(function (p) { return '<option value="' + p.id + '">' + escapeHtml(p.name) + '</option>'; }).join('');
+    });
+  }
+
+  function loadAccountOptions() {
+    return runServer('getFinancialAccountOptions', token()).then(function (res) {
+      if (!res.success) return;
+      accountOptionsCache = res.data;
+      document.getElementById('salary-accountid').innerHTML = accountOptionsCache
+        .map(function (a) { return '<option value="' + a.id + '">' + escapeHtml(a.name) + ' (' + a.currency + ')</option>'; }).join('');
+    });
+  }
+
+  function loadStaffOptions() {
+    return runServer('getFinanceStaffOptions', token()).then(function (res) {
+      if (!res.success) return;
+      staffOptionsCache = res.data;
+      document.getElementById('salary-staffid').innerHTML = '<option value="">Select…</option>' +
+        staffOptionsCache.map(function (s) { return '<option value="' + s.id + '" data-hub="' + s.hubId + '">' + escapeHtml(s.name) + '</option>'; }).join('');
+    });
+  }
+
+  function switchTab(tabKey) {
+    document.querySelectorAll('.pill-tab').forEach(function (t) { t.classList.toggle('active', t.dataset.tab === tabKey); });
+    document.querySelectorAll('.usage-config-pane').forEach(function (p) { p.classList.add('d-none'); });
+    document.getElementById('pane-' + tabKey).classList.remove('d-none');
+    if (tabKey === 'expenses') fetchExpenses();
+    if (tabKey === 'reimbursements') fetchReimbursements();
+    if (tabKey === 'invoices') fetchInvoices();
+    if (tabKey === 'salaries') fetchSalaries();
+  }
+
+  function statusBadgeClass(status) {
+    if (status === 'Approved') return 'badge-active';
+    if (status === 'Rejected' || status === 'Cancelled') return 'badge-inactive';
+    if (status === 'Returned') return 'bg-warning text-dark';
+    return 'bg-info text-dark';
+  }
+
+  // ---------- Expenses ----------
+  function fetchExpenses() {
+    var tbody = document.getElementById('expenses-table-body');
+    tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">Loading…</td></tr>';
+    runServer('getExpenses', token(), expensesState).then(function (res) {
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="7" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      var records = res.data.records;
+      if (!records.length) { tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">No expenses found.</td></tr>'; return; }
+      tbody.innerHTML = records.map(function (x) {
+        recordCache['expense:' + x.ExpenseID] = x;
+        return '<tr class="beneficiary-row" onclick="FinanceExpenses.openDetail(\'expense\', \'' + x.ExpenseID + '\')">' +
+          '<td class="fw-medium">' + escapeHtml(x.PayeeName) + '</td>' +
+          '<td>' + escapeHtml(x.ExpenseCategory) + '</td>' +
+          '<td>' + escapeHtml(x.HubName || '') + '</td>' +
+          '<td class="text-end">' + formatCurrencyIn(x.TotalAmount, x.Currency) + '</td>' +
+          '<td>' + formatDateDisplay(x.Date) + '</td>' +
+          '<td><span class="badge ' + statusBadgeClass(x.Status) + '">' + escapeHtml(x.Status) + '</span></td>' +
+          '<td><span class="badge ' + (x.PaymentStatus === 'Paid' ? 'badge-active' : 'badge-inactive') + '">' + escapeHtml(x.PaymentStatus) + '</span></td>' +
+        '</tr>';
+      }).join('');
+      renderSummary('expenses-summary', res.data.pagination);
+      renderPagination('expenses-pagination', res.data.pagination, function (p) { expensesState.page = p; fetchExpenses(); });
+    });
+  }
+
+  // ---------- Reimbursements ----------
+  function fetchReimbursements() {
+    var tbody = document.getElementById('reimbursements-table-body');
+    tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">Loading…</td></tr>';
+    runServer('getReimbursements', token(), reimbState).then(function (res) {
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="8" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      var records = res.data.records;
+      if (!records.length) { tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">No reimbursements found.</td></tr>'; return; }
+      tbody.innerHTML = records.map(function (r) {
+        recordCache['reimbursement:' + r.ReimbursementID] = r;
+        return '<tr class="beneficiary-row" onclick="FinanceExpenses.openDetail(\'reimbursement\', \'' + r.ReimbursementID + '\')">' +
+          '<td class="fw-medium">' + escapeHtml(r.StaffName || '') + '</td>' +
+          '<td>' + escapeHtml(r.ExpenseCategory) + '</td>' +
+          '<td>' + escapeHtml(r.HubName || '') + '</td>' +
+          '<td class="text-end">' + formatCurrencyIn(r.Amount, r.Currency) + '</td>' +
+          '<td class="text-end">' + (r.ApprovedAmount !== '' && r.ApprovedAmount !== undefined ? formatCurrencyIn(r.ApprovedAmount, r.Currency) : '&mdash;') + '</td>' +
+          '<td>' + formatDateDisplay(r.Date) + '</td>' +
+          '<td><span class="badge ' + statusBadgeClass(r.Status) + '">' + escapeHtml(r.Status) + '</span></td>' +
+          '<td><span class="badge ' + (r.PaymentStatus === 'Paid' ? 'badge-active' : 'badge-inactive') + '">' + escapeHtml(r.PaymentStatus) + '</span></td>' +
+        '</tr>';
+      }).join('');
+      renderSummary('reimbursements-summary', res.data.pagination);
+      renderPagination('reimbursements-pagination', res.data.pagination, function (p) { reimbState.page = p; fetchReimbursements(); });
+    });
+  }
+
+  // ---------- Invoices ----------
+  function fetchInvoices() {
+    var tbody = document.getElementById('invoices-table-body');
+    tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">Loading…</td></tr>';
+    runServer('getInvoices', token(), invoicesState).then(function (res) {
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="9" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      var records = res.data.records;
+      if (!records.length) { tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">No invoices found.</td></tr>'; return; }
+      tbody.innerHTML = records.map(function (i) {
+        recordCache['invoice:' + i.InvoiceID] = i;
+        return '<tr class="beneficiary-row" onclick="FinanceExpenses.openDetail(\'invoice\', \'' + i.InvoiceID + '\')">' +
+          '<td class="text-muted">' + escapeHtml(i.InvoiceNumber || i.InvoiceID) + '</td>' +
+          '<td class="fw-medium">' + escapeHtml(i.SupplierName) + '</td>' +
+          '<td>' + escapeHtml(i.HubName || '') + '</td>' +
+          '<td>' + escapeHtml(i.ExpenseCategory) + '</td>' +
+          '<td class="text-end">' + formatCurrencyIn(i.TotalAmount, i.Currency) + '</td>' +
+          '<td>' + formatDateDisplay(String(i.DateSubmitted).slice(0, 10)) + '</td>' +
+          '<td class="small text-muted">' + escapeHtml(i.SubmittedByEmail || '') + '</td>' +
+          '<td><span class="badge ' + statusBadgeClass(i.Status) + '">' + escapeHtml(i.Status) + '</span></td>' +
+          '<td><span class="badge ' + (i.PaymentStatus === 'Paid' ? 'badge-active' : 'badge-inactive') + '">' + escapeHtml(i.PaymentStatus) + '</span></td>' +
+        '</tr>';
+      }).join('');
+      renderSummary('invoices-summary', res.data.pagination);
+      renderPagination('invoices-pagination', res.data.pagination, function (p) { invoicesState.page = p; fetchInvoices(); });
+    });
+  }
+
+  function renderSummary(elId, p) {
+    var el = document.getElementById(elId);
+    var start = (p.page - 1) * p.pageSize + 1;
+    var end = Math.min(p.page * p.pageSize, p.totalRecords);
+    el.textContent = p.totalRecords === 0 ? 'No records' : ('Showing ' + start + '–' + end + ' of ' + p.totalRecords);
+  }
+
+  // ---------- Detail modal (shared: expense, reimbursement, invoice) ----------
+  function idField(kind) { return kind === 'expense' ? 'ExpenseID' : (kind === 'invoice' ? 'InvoiceID' : 'ReimbursementID'); }
+  function fieldsFor(kind) { return kind === 'expense' ? EXPENSE_FIELDS : (kind === 'invoice' ? INVOICE_FIELDS : REIMBURSEMENT_FIELDS); }
+  function docFieldFor(kind) { return kind === 'invoice' ? 'InvoiceDocumentID' : 'ReceiptDocumentID'; }
+
+  function openDetail(kind, id) {
+    var r = recordCache[kind + ':' + id];
+    if (!r) return;
+    pendingDetail = { kind: kind, id: id };
+
+    document.getElementById('financeRecordDetailTitle').textContent =
+      kind === 'expense' ? 'Expense Details' : (kind === 'invoice' ? 'Invoice Details' : 'Reimbursement Details');
+
+    var banner = document.getElementById('financerecord-detail-reason-banner');
+    if (r.Status === 'Rejected' || r.Status === 'Returned' || r.Status === 'Cancelled') {
+      var label = r.Status === 'Rejected' ? 'Rejected' : (r.Status === 'Returned' ? 'Returned for correction' : 'Cancelled');
+      banner.innerHTML = '<div class="alert alert-warning small mb-3"><strong>' + label + ':</strong> ' + escapeHtml(r.RejectionReason || '') + '</div>';
+    } else {
+      banner.innerHTML = '';
+    }
+
+    var amountRows;
+    if (kind === 'reimbursement') {
+      amountRows = '<div class="bendetail-row"><span class="k">Requested</span><span class="v">' + formatCurrencyIn(r.Amount, r.Currency) + '</span></div>' +
+        (r.ApprovedAmount !== '' && r.ApprovedAmount !== undefined ? '<div class="bendetail-row"><span class="k">Approved</span><span class="v fw-bold">' + formatCurrencyIn(r.ApprovedAmount, r.Currency) + '</span></div>' : '');
+    } else {
+      amountRows = '<div class="bendetail-row"><span class="k">Amount</span><span class="v">' + formatCurrencyIn(r.Amount, r.Currency) + '</span></div>' +
+        '<div class="bendetail-row"><span class="k">Tax</span><span class="v">' + formatCurrencyIn(r.TaxAmount, r.Currency) + '</span></div>' +
+        '<div class="bendetail-row"><span class="k">Total</span><span class="v fw-bold">' + formatCurrencyIn(r.TotalAmount, r.Currency) + '</span></div>';
+    }
+
+    var docId = r[docFieldFor(kind)];
+    document.getElementById('financerecord-detail-fields').innerHTML = fieldsFor(kind).map(function (f) {
+      var val = (f[0] === 'ApprovalDate' || f[0] === 'DateSubmitted') ? formatDateDisplay(String(r[f[0]] || '').slice(0, 10)) : r[f[0]];
+      if (!val) return '';
+      return '<div class="bendetail-row"><span class="k">' + f[1] + '</span><span class="v">' + escapeHtml(String(val)) + '</span></div>';
+    }).join('') + amountRows +
+      (docId ? '<div class="bendetail-row"><span class="k">Document</span><span class="v"><a href="#" onclick="FinanceExpenses.viewDocument(\'' + docId + '\'); return false;"><i class="bi bi-paperclip"></i> View</a></span></div>' : '');
+
+    document.getElementById('financerecord-detail-actions').innerHTML = buildActionButtons(kind, r);
+    detailModal.show();
+  }
+
+  function buildActionButtons(kind, r) {
+    var id = r[idField(kind)];
+    var buttons = '';
+    if (r.Status === 'Submitted' || r.Status === 'Under Review') {
+      if (kind === 'invoice' && r.Status === 'Submitted') {
+        buttons += '<button class="btn btn-light" onclick="FinanceExpenses.markInvoiceUnderReview(\'' + id + '\')">Start Review</button>';
+      }
+      buttons += '<button class="btn btn-outline-danger" onclick="FinanceExpenses.promptReturn(\'' + kind + '\', \'' + id + '\')">Return for Correction</button>';
+      buttons += '<button class="btn btn-danger" onclick="FinanceExpenses.promptReject(\'' + kind + '\', \'' + id + '\')">Reject</button>';
+      if (kind === 'reimbursement') {
+        buttons += '<button class="btn btn-primary" onclick="FinanceExpenses.openApproveReimbursement(\'' + id + '\', ' + Number(r.Amount) + ')">Approve</button>';
+      } else {
+        buttons += '<button class="btn btn-primary" onclick="FinanceExpenses.approve(\'' + kind + '\', \'' + id + '\')">Approve</button>';
+      }
+    } else if (r.Status === 'Approved' && r.PaymentStatus !== 'Paid') {
+      buttons += '<button class="btn btn-outline-danger" onclick="FinanceExpenses.promptCancel(\'' + kind + '\', \'' + id + '\')">Cancel</button>';
+      buttons += '<button class="btn btn-primary" onclick="FinanceExpenses.openPaidModal(\'' + kind + '\', \'' + id + '\')">Mark Paid</button>';
+    }
+    buttons += '<button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>';
+    return buttons;
+  }
+
+  function fnFor(kind, action) {
+    var map = {
+      expense: { approve: 'approveExpense', reject: 'rejectExpense', return: 'returnExpenseForCorrection', cancel: 'cancelExpense', pay: 'payExpense' },
+      reimbursement: { reject: 'rejectReimbursement', return: 'returnReimbursementForCorrection', cancel: 'cancelReimbursement', pay: 'payReimbursement' },
+      invoice: { approve: 'approveInvoice', reject: 'rejectInvoice', return: 'returnInvoiceForCorrection', cancel: 'cancelInvoice', pay: 'payInvoice' }
+    };
+    return map[kind][action];
+  }
+
+  function refreshAllTabs() {
+    fetchExpenses();
+    fetchReimbursements();
+    fetchInvoices();
+    fetchStipendInvoices();
+  }
+
+  // ---------- Reason modal (Reject / Return / Cancel) ----------
+  function handleConfirmReason() {
+    if (!pendingReason) return;
+    var reason = document.getElementById('financerecord-reason-text').value.trim();
+    if (!reason) { showToast('A reason is required.', 'danger'); return; }
+    runServer(fnFor(pendingReason.kind, pendingReason.action), token(), pendingReason.id, reason).then(function (res) {
+      reasonModal.hide();
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Done.', 'success');
+      detailModal.hide();
+      refreshAllTabs();
+    });
+  }
+
+  // ---------- Mark Paid modal ----------
+  function handleConfirmPaid() {
+    if (!pendingPay) return;
+    var data = {
+      PaymentDate: document.getElementById('financerecord-payment-date').value,
+      PaymentReference: document.getElementById('financerecord-payment-reference').value.trim()
+    };
+    runServer(fnFor(pendingPay.kind, 'pay'), token(), pendingPay.id, data).then(function (res) {
+      paidModal.hide();
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Marked paid.', 'success');
+      detailModal.hide();
+      refreshAllTabs();
+    });
+  }
+
+  // ---------- Approve Reimbursement modal ----------
+  function handleConfirmApproveReimbursement() {
+    if (!pendingApprove) return;
+    var amount = document.getElementById('reimbursement-approved-amount').value;
+    runServer('approveReimbursement', token(), pendingApprove.id, amount).then(function (res) {
+      reimbApproveModal.hide();
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Reimbursement approved.', 'success');
+      detailModal.hide();
+      refreshAllTabs();
+    });
+  }
+
+  // ---------- Salaries ----------
+  function fetchSalaries() {
+    // Sequential, not Promise.all — Apps Script queues concurrent doPost
+    // executions against the same deployment rather than truly running
+    // them in parallel (established elsewhere in this codebase).
+    fetchStipendInvoices().then(fetchSalaryRecords);
+  }
+
+  function fetchStipendInvoices() {
+    return runServer('getStipendInvoices', token(), { hubId: salariesState.hubId, countryId: salariesState.countryId }).then(function (res) {
+      var section = document.getElementById('stipend-invoices-section');
+      var tbody = document.getElementById('stipend-invoices-table-body');
+      var records = (res.success && res.data) || [];
+      section.classList.toggle('d-none', records.length === 0);
+      tbody.innerHTML = records.map(function (i) {
+        recordCache['invoice:' + i.InvoiceID] = i;
+        return '<tr class="beneficiary-row" onclick="FinanceExpenses.openDetail(\'invoice\', \'' + i.InvoiceID + '\')">' +
+          '<td class="text-muted">' + escapeHtml(i.InvoiceNumber || i.InvoiceID) + '</td>' +
+          '<td class="fw-medium">' + escapeHtml(i.SupplierName) + '</td>' +
+          '<td>' + escapeHtml(i.HubName || '') + '</td>' +
+          '<td class="text-end">' + formatCurrencyIn(i.TotalAmount, i.Currency) + '</td>' +
+          '<td>' + formatDateDisplay(String(i.DateSubmitted).slice(0, 10)) + '</td>' +
+          '<td><span class="badge ' + statusBadgeClass(i.Status) + '">' + escapeHtml(i.Status) + '</span></td>' +
+          '<td><span class="badge ' + (i.PaymentStatus === 'Paid' ? 'badge-active' : 'badge-inactive') + '">' + escapeHtml(i.PaymentStatus) + '</span></td>' +
+        '</tr>';
+      }).join('');
+    });
+  }
+
+  function fetchSalaryRecords() {
+    var tbody = document.getElementById('salaries-table-body');
+    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">Loading…</td></tr>';
+    runServer('getSalaries', token(), salariesState).then(function (res) {
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="6" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      var records = res.data.records;
+      if (!records.length) { tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">No salary records found.</td></tr>'; return; }
+      tbody.innerHTML = records.map(function (s) {
+        salaryCache[s.SalaryID] = s;
+        var statusBadge = s.Status === 'Approved' ? 'badge-active' : (s.Status === 'Cancelled' ? 'badge-inactive' : 'bg-info text-dark');
+        return '<tr class="beneficiary-row" onclick="FinanceExpenses.openSalaryDetail(\'' + s.SalaryID + '\')">' +
+          '<td class="fw-medium">' + escapeHtml(s.StaffName || '') + '</td>' +
+          '<td>' + escapeHtml(s.HubName || '') + '</td>' +
+          '<td>' + escapeHtml(s.Month) + '</td>' +
+          '<td class="text-end">' + formatCurrencyIn(s.NetProjectCost, s.Currency) + '</td>' +
+          '<td><span class="badge ' + statusBadge + '">' + escapeHtml(s.Status) + '</span></td>' +
+          '<td><span class="badge ' + (s.PaymentStatus === 'Paid' ? 'badge-active' : 'badge-inactive') + '">' + escapeHtml(s.PaymentStatus) + '</span></td>' +
+        '</tr>';
+      }).join('');
+      renderSummary('salaries-summary', res.data.pagination);
+      renderPagination('salaries-pagination', res.data.pagination, function (p) { salariesState.page = p; fetchSalaries(); });
+    });
+  }
+
+  function autoFillHubFromStaff() {
+    var select = document.getElementById('salary-staffid');
+    var opt = select.options[select.selectedIndex];
+    var hubId = opt ? opt.dataset.hub : '';
+    if (hubId) document.getElementById('salary-hubid').value = hubId;
+  }
+
+  function openAddSalary() {
+    document.getElementById('salary-form').reset();
+    salaryDocUpload.reset();
+    salaryModal.show();
+  }
+
+  function handleSaveSalary(e) {
+    e.preventDefault();
+    var accountId = document.getElementById('salary-accountid').value;
+    var account = accountOptionsCache.filter(function (a) { return a.id === accountId; })[0];
+    var data = {
+      StaffID: document.getElementById('salary-staffid').value,
+      Month: document.getElementById('salary-month').value,
+      HubID: document.getElementById('salary-hubid').value,
+      ProjectID: document.getElementById('salary-projectid').value,
+      GrossAmount: document.getElementById('salary-grossamount').value,
+      Allowances: document.getElementById('salary-allowances').value,
+      Deductions: document.getElementById('salary-deductions').value,
+      AccountID: accountId,
+      Currency: account ? account.currency : '',
+      PayrollDocumentID: salaryDocUpload.getDocumentId()
+    };
+    var btn = document.getElementById('salary-save-btn');
+    btn.disabled = true;
+    runServer('createSalary', token(), data).then(function (res) {
+      btn.disabled = false;
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      salaryModal.hide();
+      showToast('Salary record saved.', 'success');
+      fetchSalaries();
+    }).catch(function (err) { btn.disabled = false; showToast(err.message, 'danger'); });
+  }
+
+  function openSalaryDetail(id) {
+    var s = salaryCache[id];
+    if (!s) return;
+
+    document.getElementById('salarydetail-fields').innerHTML = SALARY_DETAIL_FIELDS.map(function (f) {
+      var val = f[0] === 'ApprovalDate' ? formatDateDisplay(String(s[f[0]] || '').slice(0, 10)) : s[f[0]];
+      if (!val) return '';
+      return '<div class="bendetail-row"><span class="k">' + f[1] + '</span><span class="v">' + escapeHtml(String(val)) + '</span></div>';
+    }).join('') +
+      '<div class="bendetail-row"><span class="k">Gross</span><span class="v">' + formatCurrencyIn(s.GrossAmount, s.Currency) + '</span></div>' +
+      '<div class="bendetail-row"><span class="k">Allowances</span><span class="v">' + formatCurrencyIn(s.Allowances, s.Currency) + '</span></div>' +
+      '<div class="bendetail-row"><span class="k">Deductions</span><span class="v">' + formatCurrencyIn(s.Deductions, s.Currency) + '</span></div>' +
+      '<div class="bendetail-row"><span class="k">Net</span><span class="v fw-bold">' + formatCurrencyIn(s.NetProjectCost, s.Currency) + '</span></div>' +
+      (s.PayrollDocumentID ? '<div class="bendetail-row"><span class="k">Document</span><span class="v"><a href="#" onclick="FinanceExpenses.viewDocument(\'' + s.PayrollDocumentID + '\'); return false;"><i class="bi bi-paperclip"></i> View</a></span></div>' : '');
+
+    var actions = '';
+    if (s.Status === 'Draft') {
+      actions += '<button class="btn btn-outline-danger" onclick="FinanceExpenses.promptSalaryCancel(\'' + s.SalaryID + '\')">Cancel</button>';
+      actions += '<button class="btn btn-primary" onclick="FinanceExpenses.approveSalary(\'' + s.SalaryID + '\')">Approve</button>';
+    } else if (s.Status === 'Approved' && s.PaymentStatus !== 'Paid') {
+      actions += '<button class="btn btn-outline-danger" onclick="FinanceExpenses.promptSalaryCancel(\'' + s.SalaryID + '\')">Cancel</button>';
+      actions += '<button class="btn btn-primary" onclick="FinanceExpenses.openSalaryPaidModal(\'' + s.SalaryID + '\')">Mark Paid</button>';
+    }
+    actions += '<button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>';
+    document.getElementById('salarydetail-actions').innerHTML = actions;
+
+    salaryDetailModal.show();
+  }
+
+  function handleConfirmSalaryCancel() {
+    if (!pendingSalaryCancelId) return;
+    var reason = document.getElementById('salary-cancel-reason').value.trim();
+    if (!reason) { showToast('A reason is required.', 'danger'); return; }
+    runServer('cancelSalary', token(), pendingSalaryCancelId, reason).then(function (res) {
+      salaryCancelModal.hide();
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Cancelled.', 'success');
+      salaryDetailModal.hide();
+      fetchSalaries();
+    });
+  }
+
+  function handleConfirmSalaryPaid() {
+    if (!pendingSalaryPayId) return;
+    var data = {
+      PaymentDate: document.getElementById('salary-payment-date').value,
+      PaymentReference: document.getElementById('salary-payment-reference').value.trim()
+    };
+    runServer('paySalary', token(), pendingSalaryPayId, data).then(function (res) {
+      salaryPaidModal.hide();
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Marked paid.', 'success');
+      salaryDetailModal.hide();
+      fetchSalaries();
+    });
+  }
+
+  // ---------- Exposed to inline onclick handlers ----------
+  window.FinanceExpenses = {
+    openDetail: openDetail,
+    approve: function (kind, id) {
+      runServer(fnFor(kind, 'approve'), token(), id).then(function (res) {
+        if (!res.success) { showToast(res.message, 'danger'); return; }
+        showToast('Approved.', 'success');
+        detailModal.hide();
+        refreshAllTabs();
+      });
+    },
+    markInvoiceUnderReview: function (id) {
+      runServer('markInvoiceUnderReview', token(), id).then(function (res) {
+        if (!res.success) { showToast(res.message, 'danger'); return; }
+        openDetail('invoice', id);
+        refreshAllTabs();
+      });
+    },
+    openApproveReimbursement: function (id, requestedAmount) {
+      pendingApprove = { id: id };
+      document.getElementById('reimbursement-approved-amount').value = requestedAmount;
+      reimbApproveModal.show();
+    },
+    promptReject: function (kind, id) {
+      pendingReason = { kind: kind, action: 'reject', id: id };
+      document.getElementById('financeRecordReasonModalLabel').textContent = 'Reject';
+      document.getElementById('financerecord-reason-text').value = '';
+      reasonModal.show();
+    },
+    promptReturn: function (kind, id) {
+      pendingReason = { kind: kind, action: 'return', id: id };
+      document.getElementById('financeRecordReasonModalLabel').textContent = 'Return for Correction';
+      document.getElementById('financerecord-reason-text').value = '';
+      reasonModal.show();
+    },
+    promptCancel: function (kind, id) {
+      pendingReason = { kind: kind, action: 'cancel', id: id };
+      document.getElementById('financeRecordReasonModalLabel').textContent = 'Cancel';
+      document.getElementById('financerecord-reason-text').value = '';
+      reasonModal.show();
+    },
+    openPaidModal: function (kind, id) {
+      pendingPay = { kind: kind, id: id };
+      document.getElementById('financerecord-payment-date').value = new Date().toISOString().slice(0, 10);
+      document.getElementById('financerecord-payment-reference').value = '';
+      paidModal.show();
+    },
+    openSalaryDetail: openSalaryDetail,
+    approveSalary: function (id) {
+      runServer('approveSalary', token(), id).then(function (res) {
+        if (!res.success) { showToast(res.message, 'danger'); return; }
+        showToast('Approved.', 'success');
+        salaryDetailModal.hide();
+        fetchSalaries();
+      });
+    },
+    promptSalaryCancel: function (id) {
+      pendingSalaryCancelId = id;
+      document.getElementById('salary-cancel-reason').value = '';
+      salaryCancelModal.show();
+    },
+    openSalaryPaidModal: function (id) {
+      pendingSalaryPayId = id;
+      document.getElementById('salary-payment-date').value = new Date().toISOString().slice(0, 10);
+      document.getElementById('salary-payment-reference').value = '';
+      salaryPaidModal.show();
+    },
+    viewDocument: function (documentId) { viewFinancialDocument(documentId); }
+  };
+})();
+</script>

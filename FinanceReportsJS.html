@@ -1,0 +1,223 @@
+<script>
+(function () {
+  var projectOptionsCache = [];
+  var hubOptionsCache = [];
+  var lastMonthlyRecords = [];
+  var lastProjectRecords = [];
+  var lastHubRecords = [];
+  var lastCategoryRecords = [];
+
+  var REPORT_EXPORT_COLUMNS = [
+    { key: 'Type', label: 'Type' }, { key: 'Category', label: 'Category' }, { key: 'Date', label: 'Date' },
+    { key: 'HubID', label: 'Hub' }, { key: 'ProjectID', label: 'Project' },
+    { key: 'Amount', label: 'Amount' }, { key: 'Currency', label: 'Currency' },
+    { key: 'Status', label: 'Status' }, { key: 'PaymentStatus', label: 'Payment Status' }
+  ];
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'financereports') return;
+    if (!window.MNE_CURRENT_USER || window.MNE_CURRENT_USER.role !== 'Admin') return;
+    initFinanceReportsPage();
+  });
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  function initFinanceReportsPage() {
+    document.querySelectorAll('.pill-tab').forEach(function (tab) {
+      tab.addEventListener('click', function () { switchTab(tab.dataset.tab); });
+    });
+
+    document.getElementById('report-month').value = new Date().toISOString().slice(0, 7);
+    document.getElementById('report-month').addEventListener('change', fetchMonthlyReport);
+    document.getElementById('monthly-country-filter').addEventListener('change', fetchMonthlyReport);
+    document.getElementById('monthly-hub-filter').addEventListener('change', fetchMonthlyReport);
+    document.getElementById('btn-export-monthly').addEventListener('click', function () {
+      exportRecordsToFile(lastMonthlyRecords, REPORT_EXPORT_COLUMNS, 'csv', 'MonthlyFinancialReport_' + document.getElementById('report-month').value);
+    });
+
+    document.getElementById('report-project').addEventListener('change', fetchProjectReport);
+    document.getElementById('project-country-filter').addEventListener('change', function (e) {
+      populateProjectSelect(e.target.value);
+      fetchProjectReport();
+    });
+    document.getElementById('btn-export-project').addEventListener('click', function () {
+      exportRecordsToFile(lastProjectRecords, REPORT_EXPORT_COLUMNS, 'csv', 'ProjectFinancialReport');
+    });
+
+    document.getElementById('report-hub').addEventListener('change', fetchHubReport);
+    document.getElementById('hub-country-filter-report').addEventListener('change', function (e) {
+      populateHubSelect(e.target.value);
+      fetchHubReport();
+    });
+    document.getElementById('btn-export-hub').addEventListener('click', function () {
+      exportRecordsToFile(lastHubRecords, REPORT_EXPORT_COLUMNS, 'csv', 'HubFinancialReport');
+    });
+
+    document.getElementById('btn-run-category').addEventListener('click', fetchCategoryReport);
+    document.getElementById('category-country-filter').addEventListener('change', fetchCategoryReport);
+    document.getElementById('category-hub-filter').addEventListener('change', fetchCategoryReport);
+    document.getElementById('btn-export-category').addEventListener('click', function () {
+      exportRecordsToFile(lastCategoryRecords, REPORT_EXPORT_COLUMNS, 'csv', 'CategoryFinancialReport');
+    });
+
+    Promise.all([loadProjectOptions(), loadHubOptions(), loadCountryOptions()]).then(fetchMonthlyReport);
+  }
+
+  function loadProjectOptions() {
+    return runServer('getProjectOptions', token()).then(function (res) {
+      if (!res.success) return;
+      projectOptionsCache = res.data;
+      populateProjectSelect('');
+    });
+  }
+
+  function loadHubOptions() {
+    return runServer('getHubOptions', token()).then(function (res) {
+      if (!res.success) return;
+      hubOptionsCache = res.data;
+      populateHubSelect('');
+      var opts = hubOptionsCache.map(function (h) { return '<option value="' + h.id + '">' + escapeHtml(h.name) + '</option>'; }).join('');
+      document.getElementById('monthly-hub-filter').innerHTML = '<option value="">All Hubs</option>' + opts;
+      document.getElementById('category-hub-filter').innerHTML = '<option value="">All Hubs</option>' + opts;
+    });
+  }
+
+  function loadCountryOptions() {
+    return runServer('getCountryOptions', token()).then(function (res) {
+      if (!res.success) return;
+      var opts = res.data.map(function (c) { return '<option value="' + c.id + '">' + escapeHtml(c.name) + '</option>'; }).join('');
+      document.getElementById('monthly-country-filter').innerHTML = '<option value="">All Countries</option>' + opts;
+      document.getElementById('project-country-filter').innerHTML = '<option value="">All Countries</option>' + opts;
+      document.getElementById('hub-country-filter-report').innerHTML = '<option value="">All Countries</option>' + opts;
+      document.getElementById('category-country-filter').innerHTML = '<option value="">All Countries</option>' + opts;
+    });
+  }
+
+  // Country here narrows which projects/hubs even SHOW in the picker
+  // (client-side, via hubOptionsCache's countryId) — the report function
+  // itself is still called with a single projectId/hubId, unchanged.
+  function populateProjectSelect(countryId) {
+    var hubCountryById = {};
+    hubOptionsCache.forEach(function (h) { hubCountryById[h.id] = h.countryId; });
+    var filtered = countryId ? projectOptionsCache.filter(function (p) { return hubCountryById[p.hubId] === countryId; }) : projectOptionsCache;
+    document.getElementById('report-project').innerHTML = '<option value="">Select a project…</option>' +
+      filtered.map(function (p) { return '<option value="' + p.id + '">' + escapeHtml(p.name) + '</option>'; }).join('');
+  }
+
+  function populateHubSelect(countryId) {
+    var filtered = countryId ? hubOptionsCache.filter(function (h) { return h.countryId === countryId; }) : hubOptionsCache;
+    document.getElementById('report-hub').innerHTML = '<option value="">Select a hub…</option>' +
+      filtered.map(function (h) { return '<option value="' + h.id + '">' + escapeHtml(h.name) + '</option>'; }).join('');
+  }
+
+  function switchTab(tabKey) {
+    document.querySelectorAll('.pill-tab').forEach(function (t) { t.classList.toggle('active', t.dataset.tab === tabKey); });
+    document.querySelectorAll('.usage-config-pane').forEach(function (p) { p.classList.add('d-none'); });
+    document.getElementById('pane-' + tabKey).classList.remove('d-none');
+    if (tabKey === 'category' && !lastCategoryRecords.length) fetchCategoryReport();
+  }
+
+  function statCard(icon, value, label) {
+    return '<div class="mini-stat-card"><i class="bi ' + icon + ' mini-stat-icon"></i><div class="mini-stat-value">' + value + '</div><div class="mini-stat-label">' + label + '</div></div>';
+  }
+
+  // ---------- Monthly ----------
+  function fetchMonthlyReport() {
+    var tbody = document.getElementById('monthly-report-table-body');
+    tbody.innerHTML = '<tr><td colspan="2" class="text-center text-muted py-4">Loading…</td></tr>';
+    var monthlyOptions = {
+      hubId: document.getElementById('monthly-hub-filter').value,
+      countryId: document.getElementById('monthly-country-filter').value
+    };
+    runServer('getMonthlyFinancialReport', token(), document.getElementById('report-month').value, monthlyOptions).then(function (res) {
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="2" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      lastMonthlyRecords = res.data.records;
+      document.getElementById('monthly-report-totals').innerHTML =
+        statCard('bi-graph-up-arrow', formatCurrency(res.data.fundingConfirmed), 'Funding Confirmed') +
+        statCard('bi-receipt', formatCurrency(res.data.totalPaid), 'Total Paid');
+      if (!res.data.byCategory.length) { tbody.innerHTML = '<tr><td colspan="2" class="text-center text-muted py-4">No paid expenditure this month.</td></tr>'; return; }
+      tbody.innerHTML = res.data.byCategory.map(function (c) {
+        return '<tr><td>' + escapeHtml(c.category) + '</td><td class="text-end">' + formatCurrency(c.amount) + '</td></tr>';
+      }).join('');
+    });
+  }
+
+  // ---------- Project ----------
+  function fetchProjectReport() {
+    var projectId = document.getElementById('report-project').value;
+    var el = document.getElementById('project-report-body');
+    if (!projectId) { el.innerHTML = '<p class="text-muted text-center py-4">Choose a project.</p>'; lastProjectRecords = []; return; }
+    el.innerHTML = '<p class="text-muted text-center py-4">Loading…</p>';
+    runServer('getProjectFinancialReport', token(), projectId).then(function (res) {
+      if (!res.success) { el.innerHTML = '<p class="text-danger text-center py-4">' + res.message + '</p>'; return; }
+      var d = res.data;
+      lastProjectRecords = d.records;
+      var costPerBenText = d.costPerBeneficiary === null
+        ? 'N/A (no beneficiary count on this project)'
+        : formatCurrency(d.costPerBeneficiary) + ' per beneficiary — a cost ratio only, not a measure of impact';
+
+      el.innerHTML =
+        '<div class="mini-stat-grid mb-3">' +
+          statCard('bi-graph-up-arrow', formatCurrency(d.fundingConfirmed), 'Funding Confirmed') +
+          statCard('bi-receipt', formatCurrency(d.totalPaid), 'Total Paid') +
+          statCard('bi-clipboard-check', formatCurrency(d.totalCommitted), 'Committed') +
+          (d.budget ? statCard('bi-bullseye', formatCurrency(d.budget.TotalBudget), 'Budget') : '') +
+        '</div>' +
+        '<div class="alert alert-light border small"><i class="bi bi-people"></i> ' + d.project.beneficiaryCount + ' beneficiaries reached — ' + escapeHtml(costPerBenText) + '</div>' +
+        '<div class="table-responsive"><table class="table align-middle"><thead><tr><th>Category</th><th class="text-end">Paid</th></tr></thead><tbody>' +
+        (d.byCategory.length ? d.byCategory.map(function (c) { return '<tr><td>' + escapeHtml(c.category) + '</td><td class="text-end">' + formatCurrency(c.amount) + '</td></tr>'; }).join('') : '<tr><td colspan="2" class="text-center text-muted py-3">No paid expenditure yet.</td></tr>') +
+        '</tbody></table></div>';
+    });
+  }
+
+  // ---------- Hub ----------
+  function fetchHubReport() {
+    var hubId = document.getElementById('report-hub').value;
+    var el = document.getElementById('hub-report-body');
+    if (!hubId) { el.innerHTML = '<p class="text-muted text-center py-4">Choose a hub.</p>'; lastHubRecords = []; return; }
+    el.innerHTML = '<p class="text-muted text-center py-4">Loading…</p>';
+    runServer('getHubFinancialReport', token(), hubId).then(function (res) {
+      if (!res.success) { el.innerHTML = '<p class="text-danger text-center py-4">' + res.message + '</p>'; return; }
+      var d = res.data;
+      lastHubRecords = d.records;
+
+      var accountRows = d.accounts.length
+        ? d.accounts.map(function (a) {
+            return '<tr><td>' + escapeHtml(a.accountName) + '</td><td>' + escapeHtml(a.currency) + '</td>' +
+              '<td class="text-end">' + formatCurrencyIn(a.currentBankBalance, a.currency) + '</td>' +
+              '<td class="text-end">' + formatCurrencyIn(a.availableAfterCommitments, a.currency) + '</td></tr>';
+          }).join('')
+        : '<tr><td colspan="4" class="text-center text-muted py-3">No accounts for this hub.</td></tr>';
+
+      el.innerHTML =
+        '<div class="mini-stat-grid mb-3">' +
+          statCard('bi-graph-up-arrow', formatCurrency(d.fundingConfirmed), 'Funding Confirmed') +
+          statCard('bi-receipt', formatCurrency(d.totalPaid), 'Total Paid') +
+          statCard('bi-clipboard-check', formatCurrency(d.totalCommitted), 'Committed') +
+        '</div>' +
+        '<div class="table-responsive"><table class="table align-middle"><thead><tr><th>Account</th><th>Currency</th><th class="text-end">Bank Balance</th><th class="text-end">Available</th></tr></thead><tbody>' +
+        accountRows + '</tbody></table></div>';
+    });
+  }
+
+  // ---------- Category ----------
+  function fetchCategoryReport() {
+    var tbody = document.getElementById('category-report-table-body');
+    tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted py-4">Loading…</td></tr>';
+    var options = {
+      startDate: document.getElementById('category-start-date').value,
+      endDate: document.getElementById('category-end-date').value,
+      hubId: document.getElementById('category-hub-filter').value,
+      countryId: document.getElementById('category-country-filter').value
+    };
+    runServer('getCategoryReport', token(), options).then(function (res) {
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="3" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      lastCategoryRecords = res.data.records;
+      if (!res.data.byCategory.length) { tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted py-4">No records in scope.</td></tr>'; return; }
+      tbody.innerHTML = res.data.byCategory.map(function (c) {
+        return '<tr><td>' + escapeHtml(c.category) + '</td><td class="text-end">' + formatCurrency(c.paid) + '</td><td class="text-end">' + formatCurrency(c.committed) + '</td></tr>';
+      }).join('');
+    });
+  }
+})();
+</script>

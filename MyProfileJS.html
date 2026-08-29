@@ -1,0 +1,189 @@
+<script>
+(function () {
+  var requestEmailModal;
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'myprofile') return;
+    if (!window.MNE_CURRENT_USER || window.MNE_CURRENT_USER.role !== 'HubManager') return;
+    initMyProfilePage();
+  });
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  /** Keeps the app-shell topnav avatar (Topnav.html/CommonJS.html) in sync without needing a re-login. */
+  function syncTopnavAvatar_(photoUrl) {
+    var topnavImg = document.getElementById('topnav-avatar-img');
+    var topnavIcon = document.getElementById('topnav-avatar-icon');
+    if (!topnavImg || !topnavIcon) return;
+    if (photoUrl) {
+      topnavImg.src = photoUrl;
+      topnavImg.style.display = 'block';
+      topnavIcon.style.display = 'none';
+    } else {
+      topnavImg.style.display = 'none';
+      topnavIcon.style.display = '';
+    }
+    if (window.MNE_CURRENT_USER) window.MNE_CURRENT_USER.photoUrl = photoUrl || '';
+  }
+
+  function initMyProfilePage() {
+    requestEmailModal = new bootstrap.Modal(document.getElementById('requestEmailChangeModal'));
+    document.getElementById('profile-contact-form').addEventListener('submit', handleSaveProfile);
+    document.getElementById('profile-photo-input').addEventListener('change', handlePhotoChange);
+    document.getElementById('btn-request-email-change').addEventListener('click', openRequestEmailModal);
+    document.getElementById('request-email-form').addEventListener('submit', handleRequestEmail);
+    fetchProfile();
+  }
+
+  function fetchProfile() {
+    runServer('getMyManagerProfile', token()).then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      renderProfile(res.data);
+    });
+  }
+
+  function renderProfile(p) {
+    document.getElementById('profile-name').textContent = (p.FirstName + ' ' + p.LastName).trim();
+    document.getElementById('profile-hub').textContent = p.HubName || '';
+    document.getElementById('profile-email').value = p.Email;
+
+    var img = document.getElementById('profile-photo-img');
+    var placeholder = document.getElementById('profile-photo-placeholder');
+    if (p.PhotoUrl) {
+      img.src = p.PhotoUrl;
+      img.style.display = 'block';
+      placeholder.style.display = 'none';
+    } else {
+      img.style.display = 'none';
+      placeholder.style.display = 'block';
+    }
+    // Also keep the topnav avatar in sync on every page load, not just
+    // right after an upload — covers the case where the topnav's own
+    // identity fetch (at login/boot) ran before a photo existed.
+    syncTopnavAvatar_(p.PhotoUrl);
+
+    document.getElementById('profile-phone').value = p.Phone || '';
+    document.getElementById('profile-address').value = p.Address || '';
+    document.getElementById('profile-bankname').value = p.BankName || '';
+    document.getElementById('profile-bankaccountname').value = p.BankAccountName || '';
+    document.getElementById('profile-bankaccountnumber').value = '';
+    document.getElementById('profile-bankaccountnumber').placeholder = p.BankAccountNumberMasked ? 'Currently ' + p.BankAccountNumberMasked + ' — leave blank to keep' : '';
+    document.getElementById('profile-bankcode').value = p.BankCode || '';
+    document.getElementById('profile-swiftcode').value = p.SwiftCode || '';
+    document.getElementById('profile-bankbranch').value = p.BankBranch || '';
+    document.getElementById('profile-branchcode').value = p.BranchCode || '';
+    document.getElementById('profile-mmprovider').value = p.MobileMoneyProvider || '';
+    document.getElementById('profile-mmname').value = p.MobileMoneyName || '';
+    document.getElementById('profile-mmnumber').value = '';
+    document.getElementById('profile-mmnumber').placeholder = p.MobileMoneyNumberMasked ? 'Currently ' + p.MobileMoneyNumberMasked + ' — leave blank to keep' : '';
+
+    renderCompletion_(p);
+  }
+
+  /**
+   * 4 checklist items, 25% each: Phone, Address, Photo, and "a payment
+   * method" — bank OR mobile money, whichever the manager actually uses,
+   * so someone who only ever wants bank details isn't stuck below 100%
+   * forever because they never filled in mobile money too.
+   */
+  function renderCompletion_(p) {
+    var hasPayment = !!(p.BankName && p.BankAccountName && p.BankAccountNumberMasked) ||
+      !!(p.MobileMoneyProvider && p.MobileMoneyName && p.MobileMoneyNumberMasked);
+    var items = [!!p.Phone, !!p.Address, !!p.PhotoUrl, hasPayment];
+    var doneCount = items.filter(Boolean).length;
+    var pct = Math.round((doneCount / items.length) * 100);
+
+    document.getElementById('profile-completion-pct').textContent = pct + '%';
+    document.getElementById('profile-completion-bar').style.width = pct + '%';
+    document.getElementById('profile-completion-banner').classList.toggle('d-none', pct >= 100);
+  }
+
+  function handleSaveProfile(e) {
+    e.preventDefault();
+    var data = {
+      Phone: document.getElementById('profile-phone').value.trim(),
+      Address: document.getElementById('profile-address').value.trim(),
+      BankName: document.getElementById('profile-bankname').value.trim(),
+      BankAccountName: document.getElementById('profile-bankaccountname').value.trim(),
+      BankAccountNumber: document.getElementById('profile-bankaccountnumber').value.trim(),
+      BankCode: document.getElementById('profile-bankcode').value.trim(),
+      SwiftCode: document.getElementById('profile-swiftcode').value.trim(),
+      BankBranch: document.getElementById('profile-bankbranch').value.trim(),
+      BranchCode: document.getElementById('profile-branchcode').value.trim(),
+      MobileMoneyProvider: document.getElementById('profile-mmprovider').value.trim(),
+      MobileMoneyName: document.getElementById('profile-mmname').value.trim(),
+      MobileMoneyNumber: document.getElementById('profile-mmnumber').value.trim()
+    };
+
+    var btn = document.getElementById('profile-save-btn');
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    runServer('updateMyManagerProfile', token(), data).then(function (res) {
+      btn.disabled = false;
+      btn.textContent = 'Save Changes';
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Profile updated.', 'success');
+      renderProfile(res.data);
+    }).catch(function (err) {
+      btn.disabled = false;
+      btn.textContent = 'Save Changes';
+      showToast(err.message, 'danger');
+    });
+  }
+
+  function handlePhotoChange(e) {
+    var file = e.target.files[0];
+    if (!file) return;
+    var status = document.getElementById('profile-photo-status');
+    status.textContent = 'Uploading…';
+
+    var reader = new FileReader();
+    reader.onload = function () {
+      var base64 = String(reader.result).split(',')[1];
+      runServer('updateMyManagerPhoto', token(), base64, file.type || 'image/jpeg').then(function (res) {
+        e.target.value = '';
+        if (!res.success) { status.textContent = ''; showToast(res.message, 'danger'); return; }
+        status.textContent = '';
+        document.getElementById('profile-photo-img').src = res.data.photoUrl;
+        document.getElementById('profile-photo-img').style.display = 'block';
+        document.getElementById('profile-photo-placeholder').style.display = 'none';
+        syncTopnavAvatar_(res.data.photoUrl);
+        showToast('Photo updated.', 'success');
+      }).catch(function (err) {
+        e.target.value = '';
+        status.textContent = '';
+        showToast(err.message, 'danger');
+      });
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function openRequestEmailModal() {
+    document.getElementById('request-email-form').reset();
+    document.getElementById('request-email-result').classList.add('d-none');
+    document.getElementById('request-email-btn').classList.remove('d-none');
+    requestEmailModal.show();
+  }
+
+  function handleRequestEmail(e) {
+    e.preventDefault();
+    var newEmail = document.getElementById('request-email-new').value.trim();
+    var btn = document.getElementById('request-email-btn');
+    btn.disabled = true;
+    btn.textContent = 'Sending…';
+    runServer('requestManagerEmailChange', token(), newEmail).then(function (res) {
+      btn.disabled = false;
+      btn.textContent = 'Send Request';
+      var box = document.getElementById('request-email-result');
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      box.textContent = res.data.message;
+      box.classList.remove('d-none');
+      btn.classList.add('d-none');
+    }).catch(function (err) {
+      btn.disabled = false;
+      btn.textContent = 'Send Request';
+      showToast(err.message, 'danger');
+    });
+  }
+})();
+</script>

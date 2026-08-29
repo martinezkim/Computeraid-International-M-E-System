@@ -1,0 +1,120 @@
+<script>
+(function () {
+  var state = { search: '', tableName: '', action: '', hubId: '', countryId: '', sortBy: 'Timestamp', sortDir: 'desc', page: 1, pageSize: 25 };
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'auditlog') return;
+    if (!window.MNE_CURRENT_USER || window.MNE_CURRENT_USER.role !== 'Admin') return;
+    initAuditLogPage();
+  });
+
+  function initAuditLogPage() {
+    state = { search: '', tableName: '', action: '', sortBy: 'Timestamp', sortDir: 'desc', page: 1, pageSize: 25 };
+
+    document.getElementById('audit-search').addEventListener('input', debounce(function (e) {
+      state.search = e.target.value; state.page = 1; fetchAuditLog();
+    }, 350));
+    document.getElementById('audit-table-filter').addEventListener('change', function (e) {
+      state.tableName = e.target.value; state.page = 1; fetchAuditLog();
+    });
+    document.getElementById('audit-action-filter').addEventListener('change', function (e) {
+      state.action = e.target.value; state.page = 1; fetchAuditLog();
+    });
+    document.getElementById('audit-hub-filter').addEventListener('change', function (e) {
+      state.hubId = e.target.value; state.page = 1; fetchAuditLog();
+    });
+    document.getElementById('audit-country-filter').addEventListener('change', function (e) {
+      state.countryId = e.target.value; state.page = 1; fetchAuditLog();
+    });
+    document.getElementById('audit-page-size').addEventListener('change', function (e) {
+      state.pageSize = parseInt(e.target.value, 10); state.page = 1; fetchAuditLog();
+    });
+
+    loadFilterOptions().then(fetchAuditLog);
+  }
+
+  function loadFilterOptions() {
+    var token = localStorage.getItem(MNE_SESSION_KEY);
+    return Promise.all([
+      runServer('getHubOptions', token),
+      runServer('getCountryOptions', token)
+    ]).then(function (results) {
+      var hubsRes = results[0], countriesRes = results[1];
+      if (hubsRes.success) {
+        document.getElementById('audit-hub-filter').innerHTML = '<option value="">All Hubs</option>' +
+          hubsRes.data.map(function (h) { return '<option value="' + h.id + '">' + escapeHtml(h.name) + '</option>'; }).join('');
+      }
+      if (countriesRes.success) {
+        document.getElementById('audit-country-filter').innerHTML = '<option value="">All Countries</option>' +
+          countriesRes.data.map(function (c) { return '<option value="' + c.id + '">' + escapeHtml(c.name) + '</option>'; }).join('');
+      }
+    });
+  }
+
+  function fetchAuditLog() {
+    var tbody = document.getElementById('audit-table-body');
+    tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">Loading…</td></tr>';
+
+    var token = localStorage.getItem(MNE_SESSION_KEY);
+    runServer('getAuditLog', token, state).then(function (res) {
+      if (!res.success) {
+        tbody.innerHTML = '<tr><td colspan="8" class="text-danger text-center py-4">' + res.message + '</td></tr>';
+        return;
+      }
+      renderTable(res.data.records);
+      renderSummary(res.data.pagination);
+      renderPagination('audit-pagination', res.data.pagination, function (p) {
+        state.page = p;
+        fetchAuditLog();
+      });
+    }).catch(function (err) {
+      tbody.innerHTML = '<tr><td colspan="8" class="text-danger text-center py-4">' + err.message + '</td></tr>';
+    });
+  }
+
+  var ACTION_BADGE = { Create: 'badge-active', Update: 'badge-status-underrepair', Delete: 'badge-status-faulty' };
+
+  function formatTimestamp(value) {
+    if (!value) return '';
+    var d = value instanceof Date ? value : new Date(value);
+    if (isNaN(d.getTime())) return String(value);
+    var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    var hours = d.getHours();
+    var ampm = hours >= 12 ? 'PM' : 'AM';
+    var hours12 = hours % 12 || 12;
+    var minutes = String(d.getMinutes()).padStart(2, '0');
+    return months[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear() + ', ' + hours12 + ':' + minutes + ' ' + ampm;
+  }
+
+  function renderTable(records) {
+    var tbody = document.getElementById('audit-table-body');
+    if (!records.length) {
+      tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">No audit entries found.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = records.map(function (r) {
+      var badge = ACTION_BADGE[r.Action] || 'badge-inactive';
+      return (
+        '<tr>' +
+          '<td class="text-muted" style="white-space:nowrap;">' + escapeHtml(formatTimestamp(r.Timestamp)) + '</td>' +
+          '<td>' + escapeHtml(r.ActorEmail) + ' <span class="text-muted small">(' + escapeHtml(r.ActorRole) + ')</span></td>' +
+          '<td><span class="badge ' + badge + '">' + escapeHtml(r.Action) + '</span></td>' +
+          '<td>' + escapeHtml(r.TableName) + '</td>' +
+          '<td class="text-muted">' + escapeHtml(r.RecordID) + '</td>' +
+          '<td>' + escapeHtml(r.FieldName) + '</td>' +
+          '<td class="text-muted" style="max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + escapeHtml(r.OldValue) + '">' + escapeHtml(r.OldValue || '\u2014') + '</td>' +
+          '<td style="max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + escapeHtml(r.NewValue) + '">' + escapeHtml(r.NewValue || '\u2014') + '</td>' +
+        '</tr>'
+      );
+    }).join('');
+  }
+
+  function renderSummary(p) {
+    var el = document.getElementById('audit-summary');
+    var start = (p.page - 1) * p.pageSize + 1;
+    var end = Math.min(p.page * p.pageSize, p.totalRecords);
+    el.textContent = p.totalRecords === 0 ? 'No records' : ('Showing ' + start + '\u2013' + end + ' of ' + p.totalRecords);
+  }
+})();
+</script>

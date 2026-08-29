@@ -1,0 +1,240 @@
+<script>
+(function () {
+  var salaryModal, detailModal, cancelModal, paidModal;
+  var state = { hubId: '', month: '', page: 1, pageSize: 10 };
+  var salaryCache = {};
+  var hubOptionsCache = [];
+  var projectOptionsCache = [];
+  var accountOptionsCache = [];
+  var staffOptionsCache = [];
+  var docUpload;
+  var pendingCancelId, pendingPayId;
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'salaries') return;
+    if (!window.MNE_CURRENT_USER || window.MNE_CURRENT_USER.role !== 'Admin') return;
+    initSalariesPage();
+  });
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  function initSalariesPage() {
+    state = { hubId: '', month: '', page: 1, pageSize: 10 };
+
+    salaryModal = new bootstrap.Modal(document.getElementById('salaryModal'));
+    detailModal = new bootstrap.Modal(document.getElementById('salaryDetailModal'));
+    cancelModal = new bootstrap.Modal(document.getElementById('salaryCancelModal'));
+    paidModal = new bootstrap.Modal(document.getElementById('salaryPaidModal'));
+
+    document.getElementById('btn-add-salary').addEventListener('click', openAddModal);
+    document.getElementById('salary-form').addEventListener('submit', handleSave);
+    document.getElementById('salary-staffid').addEventListener('change', autoFillHubFromStaff);
+    document.getElementById('salaries-hub-filter').addEventListener('change', function (e) { state.hubId = e.target.value; state.page = 1; fetchSalaries(); });
+    document.getElementById('salaries-month-filter').addEventListener('change', function (e) { state.month = e.target.value; state.page = 1; fetchSalaries(); });
+    document.getElementById('btn-clear-month-filter').addEventListener('click', function () {
+      document.getElementById('salaries-month-filter').value = '';
+      state.month = ''; state.page = 1; fetchSalaries();
+    });
+    document.getElementById('confirm-salary-cancel').addEventListener('click', handleConfirmCancel);
+    document.getElementById('confirm-salary-paid').addEventListener('click', handleConfirmPaid);
+
+    docUpload = initFinanceDocumentUpload({ inputId: 'salary-document-input', statusId: 'salary-document-status', documentType: 'Payroll' });
+
+    Promise.all([loadHubOptions(), loadProjectOptions(), loadAccountOptions(), loadStaffOptions()]).then(fetchSalaries);
+  }
+
+  function loadHubOptions() {
+    return runServer('getHubOptions').then(function (res) {
+      if (!res.success) return;
+      hubOptionsCache = res.data;
+      var opts = hubOptionsCache.map(function (h) { return '<option value="' + h.id + '">' + escapeHtml(h.name) + '</option>'; }).join('');
+      document.getElementById('salaries-hub-filter').innerHTML = '<option value="">All Hubs</option>' + opts;
+      document.getElementById('salary-hubid').innerHTML = opts;
+    });
+  }
+
+  function loadProjectOptions() {
+    return runServer('getProjectOptions').then(function (res) {
+      if (!res.success) return;
+      projectOptionsCache = res.data;
+      document.getElementById('salary-projectid').innerHTML = '<option value="">— None —</option>' +
+        projectOptionsCache.map(function (p) { return '<option value="' + p.id + '">' + escapeHtml(p.name) + '</option>'; }).join('');
+    });
+  }
+
+  function loadAccountOptions() {
+    return runServer('getFinancialAccountOptions', token()).then(function (res) {
+      if (!res.success) return;
+      accountOptionsCache = res.data;
+      document.getElementById('salary-accountid').innerHTML = accountOptionsCache
+        .map(function (a) { return '<option value="' + a.id + '">' + escapeHtml(a.name) + ' (' + a.currency + ')</option>'; }).join('');
+    });
+  }
+
+  function loadStaffOptions() {
+    return runServer('getFinanceStaffOptions', token()).then(function (res) {
+      if (!res.success) return;
+      staffOptionsCache = res.data;
+      document.getElementById('salary-staffid').innerHTML = '<option value="">Select…</option>' +
+        staffOptionsCache.map(function (s) { return '<option value="' + s.id + '" data-hub="' + s.hubId + '">' + escapeHtml(s.name) + '</option>'; }).join('');
+    });
+  }
+
+  function autoFillHubFromStaff() {
+    var select = document.getElementById('salary-staffid');
+    var opt = select.options[select.selectedIndex];
+    var hubId = opt ? opt.dataset.hub : '';
+    if (hubId) document.getElementById('salary-hubid').value = hubId;
+  }
+
+  function fetchSalaries() {
+    var tbody = document.getElementById('salaries-table-body');
+    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">Loading…</td></tr>';
+    runServer('getSalaries', token(), state).then(function (res) {
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="6" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      var records = res.data.records;
+      if (!records.length) { tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">No salary records found.</td></tr>'; return; }
+      tbody.innerHTML = records.map(function (s) {
+        salaryCache[s.SalaryID] = s;
+        var statusBadge = s.Status === 'Approved' ? 'badge-active' : (s.Status === 'Cancelled' ? 'badge-inactive' : 'bg-info text-dark');
+        return '<tr class="beneficiary-row" onclick="Salaries.openDetail(\'' + s.SalaryID + '\')">' +
+          '<td class="fw-medium">' + escapeHtml(s.StaffName || '') + '</td>' +
+          '<td>' + escapeHtml(s.HubName || '') + '</td>' +
+          '<td>' + escapeHtml(s.Month) + '</td>' +
+          '<td class="text-end">' + formatCurrencyIn(s.NetProjectCost, s.Currency) + '</td>' +
+          '<td><span class="badge ' + statusBadge + '">' + escapeHtml(s.Status) + '</span></td>' +
+          '<td><span class="badge ' + (s.PaymentStatus === 'Paid' ? 'badge-active' : 'badge-inactive') + '">' + escapeHtml(s.PaymentStatus) + '</span></td>' +
+        '</tr>';
+      }).join('');
+      renderSummary(res.data.pagination);
+      renderPagination('salaries-pagination', res.data.pagination, function (p) { state.page = p; fetchSalaries(); });
+    });
+  }
+
+  function renderSummary(p) {
+    var el = document.getElementById('salaries-summary');
+    var start = (p.page - 1) * p.pageSize + 1;
+    var end = Math.min(p.page * p.pageSize, p.totalRecords);
+    el.textContent = p.totalRecords === 0 ? 'No records' : ('Showing ' + start + '–' + end + ' of ' + p.totalRecords);
+  }
+
+  function openAddModal() {
+    document.getElementById('salary-form').reset();
+    docUpload.reset();
+    salaryModal.show();
+  }
+
+  function handleSave(e) {
+    e.preventDefault();
+    var accountId = document.getElementById('salary-accountid').value;
+    var account = accountOptionsCache.filter(function (a) { return a.id === accountId; })[0];
+    var data = {
+      StaffID: document.getElementById('salary-staffid').value,
+      Month: document.getElementById('salary-month').value,
+      HubID: document.getElementById('salary-hubid').value,
+      ProjectID: document.getElementById('salary-projectid').value,
+      GrossAmount: document.getElementById('salary-grossamount').value,
+      Allowances: document.getElementById('salary-allowances').value,
+      Deductions: document.getElementById('salary-deductions').value,
+      AccountID: accountId,
+      Currency: account ? account.currency : '',
+      PayrollDocumentID: docUpload.getDocumentId()
+    };
+    var btn = document.getElementById('salary-save-btn');
+    btn.disabled = true;
+    runServer('createSalary', token(), data).then(function (res) {
+      btn.disabled = false;
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      salaryModal.hide();
+      showToast('Salary record saved.', 'success');
+      fetchSalaries();
+    }).catch(function (err) { btn.disabled = false; showToast(err.message, 'danger'); });
+  }
+
+  var DETAIL_FIELDS = [
+    ['StaffName', 'Staff'], ['HubName', 'Hub'], ['Month', 'Month'], ['AccountName', 'Account'],
+    ['ApprovalDate', 'Approval Date'], ['PaymentDate', 'Payment Date'], ['PaymentReference', 'Payment Reference']
+  ];
+
+  function openDetail(id) {
+    var s = salaryCache[id];
+    if (!s) return;
+
+    document.getElementById('salarydetail-fields').innerHTML = DETAIL_FIELDS.map(function (f) {
+      var val = f[0] === 'ApprovalDate' ? formatDateDisplay(String(s[f[0]] || '').slice(0, 10)) : s[f[0]];
+      if (!val) return '';
+      return '<div class="bendetail-row"><span class="k">' + f[1] + '</span><span class="v">' + escapeHtml(String(val)) + '</span></div>';
+    }).join('') +
+      '<div class="bendetail-row"><span class="k">Gross</span><span class="v">' + formatCurrencyIn(s.GrossAmount, s.Currency) + '</span></div>' +
+      '<div class="bendetail-row"><span class="k">Allowances</span><span class="v">' + formatCurrencyIn(s.Allowances, s.Currency) + '</span></div>' +
+      '<div class="bendetail-row"><span class="k">Deductions</span><span class="v">' + formatCurrencyIn(s.Deductions, s.Currency) + '</span></div>' +
+      '<div class="bendetail-row"><span class="k">Net</span><span class="v fw-bold">' + formatCurrencyIn(s.NetProjectCost, s.Currency) + '</span></div>' +
+      (s.PayrollDocumentID ? '<div class="bendetail-row"><span class="k">Document</span><span class="v"><a href="#" onclick="Salaries.viewDocument(\'' + s.PayrollDocumentID + '\'); return false;"><i class="bi bi-paperclip"></i> View</a></span></div>' : '');
+
+    var actions = '';
+    if (s.Status === 'Draft') {
+      actions += '<button class="btn btn-outline-danger" onclick="Salaries.promptCancel(\'' + s.SalaryID + '\')">Cancel</button>';
+      actions += '<button class="btn btn-primary" onclick="Salaries.approve(\'' + s.SalaryID + '\')">Approve</button>';
+    } else if (s.Status === 'Approved' && s.PaymentStatus !== 'Paid') {
+      actions += '<button class="btn btn-outline-danger" onclick="Salaries.promptCancel(\'' + s.SalaryID + '\')">Cancel</button>';
+      actions += '<button class="btn btn-primary" onclick="Salaries.openPaidModal(\'' + s.SalaryID + '\')">Mark Paid</button>';
+    }
+    actions += '<button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>';
+    document.getElementById('salarydetail-actions').innerHTML = actions;
+
+    detailModal.show();
+  }
+
+  function handleConfirmCancel() {
+    if (!pendingCancelId) return;
+    var reason = document.getElementById('salary-cancel-reason').value.trim();
+    if (!reason) { showToast('A reason is required.', 'danger'); return; }
+    runServer('cancelSalary', token(), pendingCancelId, reason).then(function (res) {
+      cancelModal.hide();
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Cancelled.', 'success');
+      detailModal.hide();
+      fetchSalaries();
+    });
+  }
+
+  function handleConfirmPaid() {
+    if (!pendingPayId) return;
+    var data = {
+      PaymentDate: document.getElementById('salary-payment-date').value,
+      PaymentReference: document.getElementById('salary-payment-reference').value.trim()
+    };
+    runServer('paySalary', token(), pendingPayId, data).then(function (res) {
+      paidModal.hide();
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Marked paid.', 'success');
+      detailModal.hide();
+      fetchSalaries();
+    });
+  }
+
+  window.Salaries = {
+    openDetail: openDetail,
+    approve: function (id) {
+      runServer('approveSalary', token(), id).then(function (res) {
+        if (!res.success) { showToast(res.message, 'danger'); return; }
+        showToast('Approved.', 'success');
+        detailModal.hide();
+        fetchSalaries();
+      });
+    },
+    promptCancel: function (id) {
+      pendingCancelId = id;
+      document.getElementById('salary-cancel-reason').value = '';
+      cancelModal.show();
+    },
+    openPaidModal: function (id) {
+      pendingPayId = id;
+      document.getElementById('salary-payment-date').value = new Date().toISOString().slice(0, 10);
+      document.getElementById('salary-payment-reference').value = '';
+      paidModal.show();
+    },
+    viewDocument: function (documentId) { viewFinancialDocument(documentId); }
+  };
+})();
+</script>

@@ -1,0 +1,50 @@
+<div class="page-header">
+  <div>
+    <h4>Sync Devices</h4>
+    <p>Offline-capture devices (PWA installs, and later the desktop agent) authorized to sync data in</p>
+  </div>
+  <button class="btn btn-primary" id="btn-provision-device"><i class="bi bi-plus-lg"></i> Provision Device</button>
+</div>
+
+<div class="card-surface">
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Device ID</th><th>Hub</th><th>Label</th><th>Status</th><th>Last Sync</th><th class="text-end">Actions</th></tr></thead>
+      <tbody id="devices-table-body"><tr><td colspan="6" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Provision Device Modal -->
+<div class="modal fade" id="provisionDeviceModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="provision-form" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title">Provision Sync Device</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label">Device ID</label>
+            <input type="text" class="form-control" id="provision-deviceid" required maxlength="60" placeholder="e.g. hubmgr-tab-01">
+            <div class="form-text">A short, unique identifier you choose — used in the sync API, not shown to end users.</div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Hub</label>
+            <select class="form-select" id="provision-hub" required></select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Device Label</label>
+            <input type="text" class="form-control" id="provision-label" required maxlength="100" placeholder="e.g. Front desk tablet">
+          </div>
+          <div id="provision-result" class="d-none alert alert-warning"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>
+          <button type="submit" class="btn btn-primary" id="provision-save-btn">Provision</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>

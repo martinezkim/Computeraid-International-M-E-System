@@ -1,0 +1,243 @@
+<script>
+(function () {
+  var budgetModal, budgetLineModal, deleteLineModal;
+  var state = { hubId: '', page: 1, pageSize: 10 };
+  var budgetCache = {};
+  var currentBudgetId = null;
+  var pendingDeleteLineId = null;
+  var hubOptionsCache = [];
+  var projectOptionsCache = [];
+  var categoryOptionsCache = [];
+  var currencyCatalog = [];
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'budgets') return;
+    if (!window.MNE_CURRENT_USER || window.MNE_CURRENT_USER.role !== 'Admin') return;
+    initBudgetsPage();
+  });
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  function initBudgetsPage() {
+    state = { hubId: '', page: 1, pageSize: 10 };
+    currentBudgetId = null;
+
+    budgetModal = new bootstrap.Modal(document.getElementById('budgetModal'));
+    budgetLineModal = new bootstrap.Modal(document.getElementById('budgetLineModal'));
+    deleteLineModal = new bootstrap.Modal(document.getElementById('budgetLineDeleteModal'));
+
+    document.getElementById('btn-add-budget').addEventListener('click', openAddBudget);
+    document.getElementById('budget-form').addEventListener('submit', handleSaveBudget);
+    document.getElementById('budgets-hub-filter').addEventListener('change', function (e) { state.hubId = e.target.value; state.page = 1; fetchBudgets(); });
+
+    document.getElementById('btn-back-to-budgets').addEventListener('click', showListView);
+    document.getElementById('btn-add-budget-line').addEventListener('click', openAddBudgetLine);
+    document.getElementById('budgetline-form').addEventListener('submit', handleSaveBudgetLine);
+    document.getElementById('confirm-delete-budgetline').addEventListener('click', handleConfirmDeleteLine);
+
+    Promise.all([loadHubOptions(), loadProjectOptions(), loadCategoryOptions(), loadCurrencyCatalog()]).then(fetchBudgets);
+  }
+
+  function loadHubOptions() {
+    return runServer('getHubOptions').then(function (res) {
+      if (!res.success) return;
+      hubOptionsCache = res.data;
+      var opts = hubOptionsCache.map(function (h) { return '<option value="' + h.id + '">' + escapeHtml(h.name) + '</option>'; }).join('');
+      document.getElementById('budgets-hub-filter').innerHTML = '<option value="">All Hubs</option>' + opts;
+      document.getElementById('budget-hubid').innerHTML = '<option value="">— Org-wide —</option>' + opts;
+    });
+  }
+
+  function loadProjectOptions() {
+    return runServer('getProjectOptions').then(function (res) {
+      if (!res.success) return;
+      projectOptionsCache = res.data;
+      document.getElementById('budget-projectid').innerHTML = '<option value="">— None —</option>' +
+        projectOptionsCache.map(function (p) { return '<option value="' + p.id + '">' + escapeHtml(p.name) + '</option>'; }).join('');
+    });
+  }
+
+  function loadCategoryOptions() {
+    return runServer('getFinanceCategoryOptions', token(), 'Expense').then(function (res) {
+      if (!res.success) return;
+      categoryOptionsCache = res.data;
+    });
+  }
+
+  function loadCurrencyCatalog() {
+    return runServer('getSystemCurrency', token()).then(function (res) {
+      if (!res.success) return;
+      currencyCatalog = res.data.catalog || [];
+      document.getElementById('budget-currency').innerHTML = currencyCatalog
+        .map(function (c) { return '<option value="' + c.code + '">' + c.code + ' — ' + escapeHtml(c.name) + '</option>'; }).join('');
+      document.getElementById('budget-currency').value = res.data.code;
+    });
+  }
+
+  // ---------- List view ----------
+  function fetchBudgets() {
+    var tbody = document.getElementById('budgets-table-body');
+    tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">Loading…</td></tr>';
+    runServer('getBudgets', token(), state).then(function (res) {
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="7" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      var records = res.data.records;
+      if (!records.length) { tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">No budgets yet.</td></tr>'; return; }
+      tbody.innerHTML = records.map(function (b) {
+        budgetCache[b.BudgetID] = b;
+        var badge = b.Status === 'Active' ? 'badge-active' : 'badge-inactive';
+        return '<tr class="beneficiary-row" onclick="Budgets.openDetail(\'' + b.BudgetID + '\')">' +
+          '<td class="fw-medium">' + escapeHtml(b.Name) + '</td>' +
+          '<td>' + escapeHtml(b.ProjectName || '') + '</td>' +
+          '<td>' + escapeHtml(b.HubName || '') + '</td>' +
+          '<td>' + escapeHtml(b.FinancialYear) + '</td>' +
+          '<td class="text-end">' + formatCurrencyIn(b.TotalBudget, b.Currency) + '</td>' +
+          '<td>' + b.LineCount + '</td>' +
+          '<td><span class="badge ' + badge + '">' + escapeHtml(b.Status) + '</span></td>' +
+        '</tr>';
+      }).join('');
+    });
+  }
+
+  function openAddBudget() {
+    document.getElementById('budget-form').reset();
+    document.getElementById('budget-id').value = '';
+    document.getElementById('budgetModalLabel').textContent = 'Add Budget';
+    document.getElementById('budget-status-wrap').style.display = 'none';
+    document.getElementById('budget-currency').disabled = false;
+    budgetModal.show();
+  }
+
+  function handleSaveBudget(e) {
+    e.preventDefault();
+    var id = document.getElementById('budget-id').value;
+    var data = {
+      Name: document.getElementById('budget-name').value.trim(),
+      ProjectID: document.getElementById('budget-projectid').value,
+      HubID: document.getElementById('budget-hubid').value,
+      FinancialYear: document.getElementById('budget-financialyear').value.trim(),
+      TotalBudget: document.getElementById('budget-totalbudget').value,
+      Currency: document.getElementById('budget-currency').value
+    };
+    if (id) data.Status = document.getElementById('budget-status').value;
+    var call = id ? runServer('updateBudget', token(), id, data) : runServer('createBudget', token(), data);
+    call.then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      budgetModal.hide();
+      showToast('Budget saved.', 'success');
+      fetchBudgets();
+    });
+  }
+
+  // ---------- Detail view (Budget vs Actual) ----------
+  function showListView() {
+    document.getElementById('budget-detail-view').classList.add('d-none');
+    document.getElementById('budgets-list-view').classList.remove('d-none');
+    currentBudgetId = null;
+  }
+
+  function openDetail(budgetId) {
+    currentBudgetId = budgetId;
+    document.getElementById('budgets-list-view').classList.add('d-none');
+    document.getElementById('budget-detail-view').classList.remove('d-none');
+    fetchBudgetDetail();
+  }
+
+  function fetchBudgetDetail() {
+    var tbody = document.getElementById('budget-lines-table-body');
+    tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">Loading…</td></tr>';
+    runServer('getBudgetDetail', token(), currentBudgetId).then(function (res) {
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="7" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      var budget = res.data.budget, lines = res.data.lines, totals = res.data.totals;
+
+      document.getElementById('budget-detail-name').textContent = budget.Name;
+      document.getElementById('budget-detail-subtitle').textContent =
+        (budget.ProjectID ? 'Project: ' + budget.ProjectID + ' — ' : '') + 'FY ' + budget.FinancialYear + ' — Total Budget ' + formatCurrencyIn(budget.TotalBudget, budget.Currency);
+
+      document.getElementById('budget-detail-totals').innerHTML =
+        statCard('bi-bullseye', formatCurrencyIn(totals.budgeted, budget.Currency), 'Allocated (Lines)') +
+        statCard('bi-receipt', formatCurrencyIn(totals.actual, budget.Currency), 'Actual (Paid)') +
+        statCard('bi-clipboard-check', formatCurrencyIn(totals.committed, budget.Currency), 'Committed') +
+        statCard('bi-piggy-bank', formatCurrencyIn(totals.remaining, budget.Currency), 'Remaining');
+
+      if (!lines.length) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">No budget lines yet — add one to start tracking spend by category.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = lines.map(function (l) {
+        var pct = l.percentUsed === null ? '&mdash;' : Math.round(l.percentUsed * 100) + '%';
+        var pctClass = l.warningLevel === 'exceeded' ? 'text-danger fw-bold' : (l.warningLevel === 'approaching' ? 'text-warning fw-bold' : '');
+        return '<tr>' +
+          '<td class="fw-medium">' + escapeHtml(l.ExpenseCategory) + '</td>' +
+          '<td class="text-end">' + formatCurrencyIn(l.budgeted, budget.Currency) + '</td>' +
+          '<td class="text-end">' + formatCurrencyIn(l.actual, budget.Currency) + '</td>' +
+          '<td class="text-end">' + formatCurrencyIn(l.committed, budget.Currency) + '</td>' +
+          '<td class="text-end ' + (l.remaining < 0 ? 'text-danger' : '') + '">' + formatCurrencyIn(l.remaining, budget.Currency) + '</td>' +
+          '<td class="' + pctClass + '">' + pct + (l.warningLevel === 'exceeded' ? ' <i class="bi bi-exclamation-triangle-fill"></i>' : (l.warningLevel === 'approaching' ? ' <i class="bi bi-exclamation-circle"></i>' : '')) + '</td>' +
+          '<td class="text-end">' +
+            '<button class="btn btn-sm btn-light me-1" onclick="Budgets.editLine(\'' + l.BudgetLineID + '\', \'' + escapeHtml(l.ExpenseCategory).replace(/'/g, "\\'") + '\', ' + l.budgeted + ')" title="Edit"><i class="bi bi-pencil"></i></button>' +
+            '<button class="btn btn-sm btn-light text-danger" onclick="Budgets.promptDeleteLine(\'' + l.BudgetLineID + '\', \'' + escapeHtml(l.ExpenseCategory).replace(/'/g, "\\'") + '\')" title="Delete"><i class="bi bi-trash"></i></button>' +
+          '</td>' +
+        '</tr>';
+      }).join('');
+    });
+  }
+
+  function statCard(icon, value, label) {
+    return '<div class="mini-stat-card"><i class="bi ' + icon + ' mini-stat-icon"></i><div class="mini-stat-value">' + value + '</div><div class="mini-stat-label">' + label + '</div></div>';
+  }
+
+  function openAddBudgetLine() {
+    document.getElementById('budgetline-form').reset();
+    document.getElementById('budgetline-id').value = '';
+    document.getElementById('budgetline-category').innerHTML = '<option value="">Select…</option>' +
+      categoryOptionsCache.map(function (c) { return '<option value="' + escapeHtml(c.name) + '">' + escapeHtml(c.name) + '</option>'; }).join('');
+    document.getElementById('budgetLineModalLabel').textContent = 'Add Budget Line';
+    budgetLineModal.show();
+  }
+
+  function handleSaveBudgetLine(e) {
+    e.preventDefault();
+    var id = document.getElementById('budgetline-id').value;
+    var data = {
+      ExpenseCategory: document.getElementById('budgetline-category').value,
+      BudgetedAmount: document.getElementById('budgetline-amount').value
+    };
+    var call = id ? runServer('updateBudgetLine', token(), id, data) : runServer('addBudgetLine', token(), currentBudgetId, data);
+    call.then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      budgetLineModal.hide();
+      showToast('Budget line saved.', 'success');
+      fetchBudgetDetail();
+    });
+  }
+
+  function handleConfirmDeleteLine() {
+    if (!pendingDeleteLineId) return;
+    runServer('deleteBudgetLine', token(), pendingDeleteLineId).then(function (res) {
+      deleteLineModal.hide();
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Deleted.', 'success');
+      fetchBudgetDetail();
+    });
+  }
+
+  window.Budgets = {
+    openDetail: openDetail,
+    editLine: function (id, category, amount) {
+      document.getElementById('budgetline-form').reset();
+      document.getElementById('budgetline-id').value = id;
+      document.getElementById('budgetline-category').innerHTML = '<option value="">Select…</option>' +
+        categoryOptionsCache.map(function (c) { return '<option value="' + escapeHtml(c.name) + '">' + escapeHtml(c.name) + '</option>'; }).join('');
+      document.getElementById('budgetline-category').value = category;
+      document.getElementById('budgetline-amount').value = amount;
+      document.getElementById('budgetLineModalLabel').textContent = 'Edit Budget Line';
+      budgetLineModal.show();
+    },
+    promptDeleteLine: function (id, name) {
+      pendingDeleteLineId = id;
+      document.getElementById('delete-budgetline-name').textContent = name;
+      deleteLineModal.show();
+    }
+  };
+})();
+</script>

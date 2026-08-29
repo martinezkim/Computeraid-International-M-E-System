@@ -1,0 +1,279 @@
+<script>
+(function () {
+  var state = { search: '', sortBy: 'RegistrationDate', sortDir: 'desc', page: 1, pageSize: 10 };
+  var findModal, detailModal, deleteModal;
+  var formOptions = null;
+  var currentRecords = [];
+  var pendingDeleteId = null;
+
+  // ConsentStatus removed — no longer collected on the registration form
+  // (historical records still have it in the sheet, just not surfaced here).
+  var DETAIL_FIELDS = [
+    ['Age', 'Age'], ['Gender', 'Gender'], ['Country', 'Country'], ['Region', 'Region/County'],
+    ['Community', 'Location'], ['EducationLevel', 'Education Level'], ['Occupation', 'Occupation'],
+    ['UserCategory', 'User Category'], ['Phone', 'Phone'], ['Email', 'Email'],
+    ['DisabilityInfo', 'Disability Info'], ['DistanceFromHub', 'Distance from Hub'],
+    ['FirstTimeVisitor', 'First-Time Visitor'],
+    ['RegistrationDate', 'Registered']
+  ];
+
+  // Distance is captured as a fixed km-labeled bucket, not a raw number —
+  // this "calculator" is a label remap for display, not real unit math.
+  var DISTANCE_MILES_LABELS = {
+    'Less than a kilometer': 'Less than 0.62 miles',
+    '2 kilometers': '1.24 miles',
+    '5 kilometers': '3.11 miles',
+    'More than 5 kilometers': 'More than 3.11 miles'
+  };
+  var distanceUnit = 'km';
+  var currentDetailBeneficiary = null;
+
+  window.MyBeneficiariesToggleDistanceUnit = function () {
+    distanceUnit = distanceUnit === 'km' ? 'mi' : 'km';
+    if (currentDetailBeneficiary) renderDetailFields_(currentDetailBeneficiary);
+  };
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'mybeneficiaries') return;
+    if (!window.MNE_CURRENT_USER || window.MNE_CURRENT_USER.role !== 'HubManager') return;
+    initMyBeneficiariesPage();
+  });
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  function initMyBeneficiariesPage() {
+    state = { search: '', sortBy: 'RegistrationDate', sortDir: 'desc', page: 1, pageSize: 10 };
+    findModal = new bootstrap.Modal(document.getElementById('findBeneficiaryModal'));
+    detailModal = new bootstrap.Modal(document.getElementById('mybenDetailModal'));
+    deleteModal = new bootstrap.Modal(document.getElementById('mybenDeleteModal'));
+
+    document.getElementById('btn-mybendetail-delete').addEventListener('click', function () {
+      detailModal.hide();
+      openDeleteConfirm(pendingDeleteId);
+    });
+    document.getElementById('confirm-mybendelete').addEventListener('click', handleConfirmDelete);
+
+    document.getElementById('btn-find-beneficiary').addEventListener('click', function () {
+      document.getElementById('find-results').innerHTML = '';
+      document.getElementById('find-exact-id').value = '';
+      document.getElementById('find-firstname').value = '';
+      document.getElementById('find-surnameinitial').value = '';
+      document.getElementById('find-agegroup').value = '';
+      findModal.show();
+    });
+    document.getElementById('btn-run-find').addEventListener('click', runFind);
+
+    document.getElementById('mybeneficiaries-search').addEventListener('input', debounce(function (e) {
+      state.search = e.target.value;
+      state.page = 1;
+      fetchMyBeneficiaries();
+    }, 350));
+
+    document.getElementById('mybeneficiaries-page-size').addEventListener('change', function (e) {
+      state.pageSize = parseInt(e.target.value, 10);
+      state.page = 1;
+      fetchMyBeneficiaries();
+    });
+
+    document.getElementById('mybeneficiaries-bands-year').addEventListener('change', fetchMyRegistrationBands);
+
+    loadFormOptions().then(loadMyProjectYearOptions).then(fetchMyBeneficiaries);
+  }
+
+  // ---------- Registrations by Quarter ----------
+  function loadMyProjectYearOptions() {
+    return runServer('getProjectYearOptions', token()).then(function (res) {
+      var select = document.getElementById('mybeneficiaries-bands-year');
+      if (!res.success || !res.data.length) {
+        select.innerHTML = '<option value="">No project years set up yet</option>';
+        return;
+      }
+      select.innerHTML = res.data.map(function (y) { return '<option value="' + escapeHtml(y) + '">' + escapeHtml(y) + '</option>'; }).join('');
+      fetchMyRegistrationBands();
+    });
+  }
+
+  function fetchMyRegistrationBands() {
+    var year = document.getElementById('mybeneficiaries-bands-year').value;
+    var grid = document.getElementById('mybeneficiaries-bands-grid');
+    if (!year) { grid.innerHTML = '<div class="text-muted small">No project years set up yet.</div>'; return; }
+    grid.innerHTML = '<div class="text-muted small">Loading…</div>';
+
+    runServer('getMyBeneficiaryRegistrationBands', token(), year).then(function (res) {
+      if (!res.success) { grid.innerHTML = '<div class="text-danger small">' + escapeHtml(res.message) + '</div>'; return; }
+      if (!res.data.length) { grid.innerHTML = '<div class="text-muted small">No quarters set up for this project year yet.</div>'; return; }
+      grid.innerHTML = res.data.map(function (band) {
+        return '<div class="mini-stat-card">' +
+          '<div class="mini-stat-value">' + band.count + '</div>' +
+          '<div class="mini-stat-label">' + escapeHtml(band.quarterLabel) + '</div>' +
+          '<div class="text-muted small">' + escapeHtml(band.dateRangeLabel) + '</div>' +
+        '</div>';
+      }).join('');
+    });
+  }
+
+  function loadFormOptions() {
+    return runServer('getBeneficiaryFormOptions', token()).then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      formOptions = res.data;
+      fillSelect('find-agegroup', formOptions.ageBands.map(function (a) { return { value: a.name, label: a.name }; }), 'Any');
+    });
+  }
+
+  function fillSelect(id, options, blankLabel) {
+    var el = document.getElementById(id);
+    el.innerHTML = '<option value="">' + blankLabel + '</option>' +
+      options.map(function (o) { return '<option value="' + escapeHtml(o.value) + '">' + escapeHtml(o.label) + '</option>'; }).join('');
+  }
+
+  function fetchMyBeneficiaries() {
+    var tbody = document.getElementById('mybeneficiaries-table-body');
+    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">Loading…</td></tr>';
+
+    runServer('getMyHubBeneficiaries', token(), state).then(function (res) {
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="6" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      currentRecords = res.data.records;
+      renderTable(currentRecords);
+      renderSummary(res.data.pagination);
+      renderPagination('mybeneficiaries-pagination', res.data.pagination, function (p) {
+        state.page = p;
+        fetchMyBeneficiaries();
+      });
+    });
+  }
+
+  function renderTable(records) {
+    var tbody = document.getElementById('mybeneficiaries-table-body');
+    if (!records.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">No beneficiaries registered yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = records.map(function (b) {
+      var thumb = b.PhotoUrl
+        ? '<img class="beneficiary-thumb" src="' + escapeHtml(b.PhotoUrl) + '" alt="">'
+        : '<span class="beneficiary-thumb-placeholder"><i class="bi bi-person-fill"></i></span>';
+      return '<tr class="beneficiary-row" data-id="' + escapeHtml(b.BeneficiaryID) + '">' +
+        '<td class="text-muted">' + b.BeneficiaryID + '</td>' +
+        '<td class="fw-medium"><div class="beneficiary-thumb-wrap">' + thumb + '<span>' + escapeHtml(b.FirstName) + ' ' + escapeHtml(b.SurnameInitial) + '.</span></div></td>' +
+        '<td>' + escapeHtml(b.AgeGroup) + '</td>' +
+        '<td>' + escapeHtml(b.Gender) + '</td>' +
+        '<td>' + escapeHtml(b.Community || '') + '</td>' +
+        '<td>' + escapeHtml(b.RegistrationDate) + '</td>' +
+      '</tr>';
+    }).join('');
+
+    tbody.querySelectorAll('tr.beneficiary-row').forEach(function (row) {
+      row.addEventListener('click', function () { openDetail(row.dataset.id); });
+    });
+  }
+
+  function renderSummary(p) {
+    var el = document.getElementById('mybeneficiaries-summary');
+    var start = (p.page - 1) * p.pageSize + 1;
+    var end = Math.min(p.page * p.pageSize, p.totalRecords);
+    el.textContent = p.totalRecords === 0 ? 'No records' : ('Showing ' + start + '–' + end + ' of ' + p.totalRecords);
+  }
+
+  function runFind() {
+    var resultsEl = document.getElementById('find-results');
+    resultsEl.innerHTML = '<p class="text-muted text-center">Searching…</p>';
+
+    var query = {
+      beneficiaryId: document.getElementById('find-exact-id').value.trim(),
+      qrToken: document.getElementById('find-exact-id').value.trim(),
+      FirstName: document.getElementById('find-firstname').value.trim(),
+      SurnameInitial: document.getElementById('find-surnameinitial').value.trim(),
+      AgeGroup: document.getElementById('find-agegroup').value
+    };
+
+    runServer('lookupBeneficiary', token(), query).then(function (res) {
+      if (!res.success) { resultsEl.innerHTML = '<p class="text-danger">' + res.message + '</p>'; return; }
+      if (!res.data.length) { resultsEl.innerHTML = '<p class="text-muted text-center">No matches found.</p>'; return; }
+      resultsEl.innerHTML = res.data.map(function (b) {
+        return '<div class="card-surface mb-2 p-2">' +
+          '<div class="fw-medium">' + escapeHtml(b.FirstName) + ' ' + escapeHtml(b.SurnameInitial) + '. <span class="text-muted small">(' + b.BeneficiaryID + ')</span></div>' +
+          '<div class="small text-muted">' + escapeHtml(b.AgeGroup) + ' &middot; ' + escapeHtml(b.Gender) + ' &middot; ' + escapeHtml(b.Community || '') + ' &middot; Home Hub: ' + escapeHtml(b.HomeHubName || '') + '</div>' +
+        '</div>';
+      }).join('');
+    });
+  }
+
+  // ---------- Detail modal ----------
+  function openDetail(id) {
+    var b = currentRecords.filter(function (r) { return r.BeneficiaryID === id; })[0];
+    if (!b) return;
+    pendingDeleteId = id;
+
+    var img = document.getElementById('mybendetail-photo-img');
+    var placeholder = document.getElementById('mybendetail-photo-placeholder');
+    if (b.PhotoUrl) {
+      img.src = b.PhotoUrl; img.style.display = 'inline-flex'; placeholder.style.display = 'none';
+    } else {
+      img.style.display = 'none'; placeholder.style.display = 'inline-flex';
+    }
+
+    document.getElementById('mybendetail-name').textContent = (b.FirstName || '') + ' ' + (b.LastName || '');
+    document.getElementById('mybendetail-id').textContent = b.BeneficiaryID;
+
+    currentDetailBeneficiary = b;
+    renderDetailFields_(b);
+
+    detailModal.show();
+  }
+
+  function renderDetailFields_(b) {
+    document.getElementById('mybendetail-fields').innerHTML = DETAIL_FIELDS.map(function (f) {
+      var val = b[f[0]];
+      if (!val) return '';
+      if (f[0] === 'DistanceFromHub') {
+        var shown = distanceUnit === 'mi' ? (DISTANCE_MILES_LABELS[val] || val) : val;
+        return '<div class="bendetail-row"><span class="k">' + f[1] + '</span><span class="v">' + escapeHtml(shown) +
+          ' <a href="#" onclick="MyBeneficiariesToggleDistanceUnit(); return false;" class="small">(show in ' +
+          (distanceUnit === 'mi' ? 'km' : 'miles') + ')</a></span></div>';
+      }
+      return '<div class="bendetail-row"><span class="k">' + f[1] + '</span><span class="v">' + escapeHtml(val) + '</span></div>';
+    }).join('');
+  }
+
+  // ---------- Delete ----------
+  function openDeleteConfirm(id) {
+    var b = currentRecords.filter(function (r) { return r.BeneficiaryID === id; })[0];
+    if (!b) return;
+    pendingDeleteId = id;
+    document.getElementById('mybendelete-name').textContent = (b.FirstName || '') + ' ' + (b.SurnameInitial || '') + '.';
+
+    var box = document.getElementById('mybendelete-dependents');
+    box.classList.add('d-none');
+    box.innerHTML = '';
+    runServer('getBeneficiaryDependentCounts', token(), id).then(function (res) {
+      if (!res.success) return;
+      var d = res.data;
+      var total = d.visits + d.sessions + d.feedback;
+      if (total > 0) {
+        box.classList.remove('d-none');
+        box.innerHTML = 'This beneficiary has <strong>' + d.visits + ' visit(s)</strong>, <strong>' + d.sessions + ' computer session(s)</strong>, and <strong>' + d.feedback + ' feedback entr' + (d.feedback === 1 ? 'y' : 'ies') + '</strong> on record. Deleting them will not remove those, but they\'ll no longer show a name.';
+      }
+    });
+
+    deleteModal.show();
+  }
+
+  function handleConfirmDelete() {
+    if (!pendingDeleteId) return;
+    var btn = document.getElementById('confirm-mybendelete');
+    btn.disabled = true;
+    runServer('deleteBeneficiary', token(), pendingDeleteId).then(function (res) {
+      btn.disabled = false;
+      deleteModal.hide();
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Beneficiary deleted.', 'success');
+      fetchMyBeneficiaries();
+    }).catch(function (err) {
+      btn.disabled = false;
+      deleteModal.hide();
+      showToast(err.message, 'danger');
+    });
+  }
+
+})();
+</script>

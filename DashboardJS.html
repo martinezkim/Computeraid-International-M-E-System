@@ -1,0 +1,37 @@
+<script>
+(function () {
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'dashboard') return;
+    // 'dashboard' is shared with the Hub Manager view (ManagerDashboard.html)
+    // — only act when this fragment (DashboardHT.html) is the one that got
+    // loaded, which Router.gs decides based on role.
+    if (!document.getElementById('stat-total-countries')) return;
+
+    runServer('getDashboardStats', localStorage.getItem(MNE_SESSION_KEY)).then(function (res) {
+      if (!res.success) {
+        showToast(res.message, 'danger');
+        return;
+      }
+      animateCount('stat-total-countries', res.data.totalCountries);
+      animateCount('stat-total-hubs', res.data.totalHubs);
+      animateCount('stat-total-managers', res.data.totalManagers);
+      animateCount('stat-total-projects', res.data.totalProjectsThisYear);
+      animateCount('stat-total-beneficiaries', res.data.totalBeneficiariesThisYear);
+      animateCount('stat-total-assets', res.data.totalAssets);
+
+      var usageEl = document.getElementById('stat-computer-usage');
+      if (usageEl) {
+        usageEl.textContent = (res.data.avgComputerUtilizationPct === null ? '—' : res.data.avgComputerUtilizationPct + '%');
+      }
+
+      // Beneficiaries is now an all-time headcount from the Beneficiaries
+      // table (not a quota-year figure), so it doesn't get the year tag.
+      var yearTag = '(' + res.data.currentYearLabel + ')';
+      var projectsYearEl = document.getElementById('stat-projects-year');
+      if (projectsYearEl) projectsYearEl.textContent = yearTag;
+    }).catch(function (err) {
+      showToast(err.message, 'danger');
+    });
+  });
+})();
+</script>

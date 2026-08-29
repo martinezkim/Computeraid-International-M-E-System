@@ -1,0 +1,261 @@
+<script>
+(function () {
+  var detailModal, reasonModal, paidModal;
+  var pendingState = { hubId: '', page: 1, pageSize: 10 };
+  var allState = { search: '', hubId: '', status: '', page: 1, pageSize: 10 };
+  var pendingReason; // { kind: 'reject' | 'return' | 'cancel', id }
+  var pendingPayId;
+  var invoiceCache = {}; // InvoiceID -> record, populated as tables render
+
+  var DETAIL_FIELDS = [
+    ['InvoiceNumber', 'Invoice #'], ['SupplierName', 'Supplier'], ['SupplierContact', 'Supplier Contact'],
+    ['SupplierInvoiceRef', 'Supplier Ref'], ['HubName', 'Hub'], ['ExpenseCategory', 'Category'],
+    ['Description', 'Description'], ['InvoiceDate', 'Invoice Date'],
+    ['AccountName', 'Account'], ['PaymentMethod', 'Payment Method'],
+    ['SubmittedByEmail', 'Submitted By'], ['DateSubmitted', 'Date Submitted'],
+    ['ReviewedByEmail', 'Reviewed By'], ['ApprovedByEmail', 'Approved By'], ['ApprovalDate', 'Approval Date'],
+    ['PaymentDate', 'Payment Date'], ['PaymentReference', 'Payment Reference'], ['Notes', 'Notes']
+  ];
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'invoices') return;
+    if (!window.MNE_CURRENT_USER || window.MNE_CURRENT_USER.role !== 'Admin') return;
+    initInvoicesPage();
+  });
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  function initInvoicesPage() {
+    pendingState = { hubId: '', page: 1, pageSize: 10 };
+    allState = { search: '', hubId: '', status: '', page: 1, pageSize: 10 };
+
+    detailModal = new bootstrap.Modal(document.getElementById('invoiceDetailModal'));
+    reasonModal = new bootstrap.Modal(document.getElementById('invoiceReasonModal'));
+    paidModal = new bootstrap.Modal(document.getElementById('invoicePaidModal'));
+
+    document.querySelectorAll('.pill-tab').forEach(function (tab) {
+      tab.addEventListener('click', function () { switchTab(tab.dataset.tab); });
+    });
+
+    document.getElementById('pending-hub-filter').addEventListener('change', function (e) {
+      pendingState.hubId = e.target.value; pendingState.page = 1; fetchPending();
+    });
+    document.getElementById('all-invoices-search').addEventListener('input', debounce(function (e) {
+      allState.search = e.target.value; allState.page = 1; fetchAll();
+    }, 350));
+    document.getElementById('all-hub-filter').addEventListener('change', function (e) {
+      allState.hubId = e.target.value; allState.page = 1; fetchAll();
+    });
+    document.getElementById('all-status-filter').addEventListener('change', function (e) {
+      allState.status = e.target.value; allState.page = 1; fetchAll();
+    });
+
+    document.getElementById('confirm-invoice-reason').addEventListener('click', handleConfirmReason);
+    document.getElementById('confirm-invoice-paid').addEventListener('click', handleConfirmPaid);
+
+    loadHubOptions().then(fetchPending);
+  }
+
+  function loadHubOptions() {
+    return runServer('getHubOptions').then(function (res) {
+      if (!res.success) return;
+      var opts = res.data.map(function (h) { return '<option value="' + h.id + '">' + escapeHtml(h.name) + '</option>'; }).join('');
+      document.getElementById('pending-hub-filter').innerHTML = '<option value="">All Hubs</option>' + opts;
+      document.getElementById('all-hub-filter').innerHTML = '<option value="">All Hubs</option>' + opts;
+    });
+  }
+
+  function switchTab(tabKey) {
+    document.querySelectorAll('.pill-tab').forEach(function (t) { t.classList.toggle('active', t.dataset.tab === tabKey); });
+    document.querySelectorAll('.usage-config-pane').forEach(function (p) { p.classList.add('d-none'); });
+    document.getElementById('pane-' + tabKey).classList.remove('d-none');
+    if (tabKey === 'pending') fetchPending();
+    if (tabKey === 'all') fetchAll();
+  }
+
+  function fetchPending() {
+    var tbody = document.getElementById('pending-invoices-table-body');
+    tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">Loading…</td></tr>';
+    runServer('getInvoices', token(), { hubId: pendingState.hubId, pendingOnly: true, page: pendingState.page, pageSize: pendingState.pageSize }).then(function (res) {
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="8" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      renderTable(res.data.records, 'pending-invoices-table-body', false);
+      renderSummary('pending-invoices-summary', res.data.pagination);
+      renderPagination('pending-invoices-pagination', res.data.pagination, function (p) { pendingState.page = p; fetchPending(); });
+    });
+  }
+
+  function fetchAll() {
+    var tbody = document.getElementById('all-invoices-table-body');
+    tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">Loading…</td></tr>';
+    runServer('getInvoices', token(), allState).then(function (res) {
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="9" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      renderTable(res.data.records, 'all-invoices-table-body', true);
+      renderSummary('all-invoices-summary', res.data.pagination);
+      renderPagination('all-invoices-pagination', res.data.pagination, function (p) { allState.page = p; fetchAll(); });
+    });
+  }
+
+  function statusBadgeClass(status) {
+    if (status === 'Approved') return 'badge-active';
+    if (status === 'Rejected' || status === 'Cancelled') return 'badge-inactive';
+    if (status === 'Returned') return 'bg-warning text-dark';
+    return 'bg-info text-dark'; // Submitted / Under Review
+  }
+
+  function renderTable(records, tbodyId, includePayment) {
+    var tbody = document.getElementById(tbodyId);
+    var colspan = includePayment ? 9 : 8;
+    if (!records.length) { tbody.innerHTML = '<tr><td colspan="' + colspan + '" class="text-center text-muted py-4">No invoices found.</td></tr>'; return; }
+    tbody.innerHTML = records.map(function (i) {
+      invoiceCache[i.InvoiceID] = i;
+      return '<tr class="beneficiary-row" onclick="Invoices.openDetail(\'' + i.InvoiceID + '\')">' +
+        '<td class="text-muted">' + escapeHtml(i.InvoiceNumber || i.InvoiceID) + '</td>' +
+        '<td class="fw-medium">' + escapeHtml(i.SupplierName) + '</td>' +
+        '<td>' + escapeHtml(i.HubName || '') + '</td>' +
+        '<td>' + escapeHtml(i.ExpenseCategory) + '</td>' +
+        '<td class="text-end">' + formatCurrencyIn(i.TotalAmount, i.Currency) + '</td>' +
+        '<td>' + formatDateDisplay(String(i.DateSubmitted).slice(0, 10)) + '</td>' +
+        '<td class="small text-muted">' + escapeHtml(i.SubmittedByEmail || '') + '</td>' +
+        '<td><span class="badge ' + statusBadgeClass(i.Status) + '">' + escapeHtml(i.Status) + '</span></td>' +
+        (includePayment ? '<td><span class="badge ' + (i.PaymentStatus === 'Paid' ? 'badge-active' : 'badge-inactive') + '">' + escapeHtml(i.PaymentStatus) + '</span></td>' : '') +
+      '</tr>';
+    }).join('');
+  }
+
+  function renderSummary(elId, p) {
+    var el = document.getElementById(elId);
+    var start = (p.page - 1) * p.pageSize + 1;
+    var end = Math.min(p.page * p.pageSize, p.totalRecords);
+    el.textContent = p.totalRecords === 0 ? 'No records' : ('Showing ' + start + '–' + end + ' of ' + p.totalRecords);
+  }
+
+  // ---------- Detail modal ----------
+  function openDetail(id) {
+    var i = invoiceCache[id];
+    if (!i) return;
+
+    var banner = document.getElementById('invoice-detail-reason-banner');
+    if (i.Status === 'Rejected' || i.Status === 'Returned' || i.Status === 'Cancelled') {
+      var label = i.Status === 'Rejected' ? 'Rejected' : (i.Status === 'Returned' ? 'Returned for correction' : 'Cancelled');
+      banner.innerHTML = '<div class="alert alert-warning small mb-3"><strong>' + label + ':</strong> ' + escapeHtml(i.RejectionReason || '') + '</div>';
+    } else {
+      banner.innerHTML = '';
+    }
+
+    document.getElementById('invoice-detail-fields').innerHTML = DETAIL_FIELDS.map(function (f) {
+      var val = f[0] === 'DateSubmitted' || f[0] === 'ApprovalDate' ? formatDateDisplay(String(i[f[0]] || '').slice(0, 10)) : i[f[0]];
+      if (!val) return '';
+      return '<div class="bendetail-row"><span class="k">' + f[1] + '</span><span class="v">' + escapeHtml(String(val)) + '</span></div>';
+    }).join('') +
+      '<div class="bendetail-row"><span class="k">Amount</span><span class="v">' + formatCurrencyIn(i.Amount, i.Currency) + '</span></div>' +
+      '<div class="bendetail-row"><span class="k">Tax</span><span class="v">' + formatCurrencyIn(i.TaxAmount, i.Currency) + '</span></div>' +
+      '<div class="bendetail-row"><span class="k">Total</span><span class="v fw-bold">' + formatCurrencyIn(i.TotalAmount, i.Currency) + '</span></div>' +
+      (i.InvoiceDocumentID ? '<div class="bendetail-row"><span class="k">Document</span><span class="v"><a href="#" onclick="Invoices.viewDocument(\'' + i.InvoiceDocumentID + '\'); return false;"><i class="bi bi-paperclip"></i> View</a></span></div>' : '');
+
+    document.getElementById('invoice-detail-actions').innerHTML = buildActionButtons(i);
+    detailModal.show();
+  }
+
+  function buildActionButtons(i) {
+    var buttons = '';
+    if (i.Status === 'Submitted' || i.Status === 'Under Review') {
+      if (i.Status === 'Submitted') {
+        buttons += '<button class="btn btn-light" onclick="Invoices.markUnderReview(\'' + i.InvoiceID + '\')">Start Review</button>';
+      }
+      buttons += '<button class="btn btn-outline-danger" onclick="Invoices.promptReturn(\'' + i.InvoiceID + '\')">Return for Correction</button>';
+      buttons += '<button class="btn btn-danger" onclick="Invoices.promptReject(\'' + i.InvoiceID + '\')">Reject</button>';
+      buttons += '<button class="btn btn-primary" onclick="Invoices.approve(\'' + i.InvoiceID + '\')">Approve</button>';
+    } else if (i.Status === 'Approved' && i.PaymentStatus !== 'Paid') {
+      buttons += '<button class="btn btn-outline-danger" onclick="Invoices.promptCancel(\'' + i.InvoiceID + '\')">Cancel</button>';
+      buttons += '<button class="btn btn-primary" onclick="Invoices.openPaidModal(\'' + i.InvoiceID + '\')">Mark Paid</button>';
+    }
+    buttons += '<button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>';
+    return buttons;
+  }
+
+  // ---------- Reason modal (Reject / Return / Cancel) ----------
+  function handleConfirmReason() {
+    if (!pendingReason) return;
+    var reason = document.getElementById('invoice-reason-text').value.trim();
+    if (!reason) { showToast('A reason is required.', 'danger'); return; }
+
+    var call = pendingReason.kind === 'reject' ? runServer('rejectInvoice', token(), pendingReason.id, reason)
+      : pendingReason.kind === 'return' ? runServer('returnInvoiceForCorrection', token(), pendingReason.id, reason)
+      : runServer('cancelInvoice', token(), pendingReason.id, reason);
+
+    call.then(function (res) {
+      reasonModal.hide();
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Done.', 'success');
+      detailModal.hide();
+      refreshBothTabs();
+    });
+  }
+
+  // ---------- Mark Paid modal ----------
+  function handleConfirmPaid() {
+    if (!pendingPayId) return;
+    var data = {
+      PaymentDate: document.getElementById('invoice-payment-date').value,
+      PaymentReference: document.getElementById('invoice-payment-reference').value.trim()
+    };
+    runServer('payInvoice', token(), pendingPayId, data).then(function (res) {
+      paidModal.hide();
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Invoice marked paid.', 'success');
+      detailModal.hide();
+      refreshBothTabs();
+    });
+  }
+
+  function refreshBothTabs() {
+    fetchPending();
+    fetchAll();
+  }
+
+  // ---------- Exposed to inline onclick handlers ----------
+  window.Invoices = {
+    openDetail: openDetail,
+    approve: function (id) {
+      runServer('approveInvoice', token(), id).then(function (res) {
+        if (!res.success) { showToast(res.message, 'danger'); return; }
+        showToast('Invoice approved.', 'success');
+        detailModal.hide();
+        refreshBothTabs();
+      });
+    },
+    markUnderReview: function (id) {
+      runServer('markInvoiceUnderReview', token(), id).then(function (res) {
+        if (!res.success) { showToast(res.message, 'danger'); return; }
+        openDetail(id);
+        refreshBothTabs();
+      });
+    },
+    promptReject: function (id) {
+      pendingReason = { kind: 'reject', id: id };
+      document.getElementById('invoiceReasonModalLabel').textContent = 'Reject Invoice';
+      document.getElementById('invoice-reason-text').value = '';
+      reasonModal.show();
+    },
+    promptReturn: function (id) {
+      pendingReason = { kind: 'return', id: id };
+      document.getElementById('invoiceReasonModalLabel').textContent = 'Return for Correction';
+      document.getElementById('invoice-reason-text').value = '';
+      reasonModal.show();
+    },
+    promptCancel: function (id) {
+      pendingReason = { kind: 'cancel', id: id };
+      document.getElementById('invoiceReasonModalLabel').textContent = 'Cancel Invoice';
+      document.getElementById('invoice-reason-text').value = '';
+      reasonModal.show();
+    },
+    openPaidModal: function (id) {
+      pendingPayId = id;
+      document.getElementById('invoice-payment-date').value = new Date().toISOString().slice(0, 10);
+      document.getElementById('invoice-payment-reference').value = '';
+      paidModal.show();
+    },
+    viewDocument: function (documentId) { viewFinancialDocument(documentId); }
+  };
+})();
+</script>

@@ -1,0 +1,288 @@
+<div class="page-header">
+  <div>
+    <h4>Usage Module Settings</h4>
+    <p>Classification lists and Hub open-hours used by Beneficiaries, Hub Usage, and Computer Usage</p>
+  </div>
+</div>
+
+<div class="pill-tabs animate-float-up">
+  <button type="button" class="pill-tab active" data-tab="activities">Activities</button>
+  <button type="button" class="pill-tab" data-tab="visitortypes">Visitor Types</button>
+  <button type="button" class="pill-tab" data-tab="agebands">Age Bands</button>
+  <button type="button" class="pill-tab" data-tab="hubschedule">Hub Schedule</button>
+  <button type="button" class="pill-tab" data-tab="trainingcourses">Training Courses</button>
+</div>
+
+<!-- Activities -->
+<div class="card-surface usage-config-pane" id="pane-activities">
+  <div class="toolbar mb-3">
+    <h6 class="mb-0 flex-grow-1">Activities</h6>
+    <button class="btn btn-primary btn-sm" id="btn-add-activity"><i class="bi bi-plus-lg"></i> Add Activity</button>
+  </div>
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Name</th><th>Category</th><th>Status</th><th class="text-end">Actions</th></tr></thead>
+      <tbody id="activities-table-body"><tr><td colspan="4" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Visitor Types -->
+<div class="card-surface usage-config-pane d-none" id="pane-visitortypes">
+  <div class="toolbar mb-3">
+    <h6 class="mb-0 flex-grow-1">Visitor Types</h6>
+    <button class="btn btn-primary btn-sm" id="btn-add-visitortype"><i class="bi bi-plus-lg"></i> Add Visitor Type</button>
+  </div>
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Name</th><th>Status</th><th class="text-end">Actions</th></tr></thead>
+      <tbody id="visitortypes-table-body"><tr><td colspan="3" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Age Bands -->
+<div class="card-surface usage-config-pane d-none" id="pane-agebands">
+  <div class="toolbar mb-3">
+    <h6 class="mb-0 flex-grow-1">Age Bands</h6>
+    <button class="btn btn-primary btn-sm" id="btn-add-ageband"><i class="bi bi-plus-lg"></i> Add Age Band</button>
+  </div>
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Label</th><th>Min Age</th><th>Max Age</th><th>Youth?</th><th>Status</th><th class="text-end">Actions</th></tr></thead>
+      <tbody id="agebands-table-body"><tr><td colspan="6" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Hub Schedule -->
+<div class="card-surface usage-config-pane d-none" id="pane-hubschedule">
+  <div class="toolbar mb-3">
+    <h6 class="mb-0 flex-grow-1">Hub Open Hours</h6>
+  </div>
+  <p class="text-muted small">Drives the Computer Utilization Rate denominator on the Usage Overview and Hub Health pages. Each Hub needs one schedule; without one, that Hub's utilization shows as "not configured" instead of a misleading number.</p>
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Hub</th><th>Open Days</th><th>Hours</th><th class="text-end">Actions</th></tr></thead>
+      <tbody id="hubschedule-table-body"><tr><td colspan="4" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Training Courses -->
+<div class="card-surface usage-config-pane d-none" id="pane-trainingcourses">
+  <div class="toolbar mb-3">
+    <h6 class="mb-0 flex-grow-1">Training Courses</h6>
+    <button class="btn btn-primary btn-sm" id="btn-add-trainingcourse"><i class="bi bi-plus-lg"></i> Add Course</button>
+  </div>
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Name</th><th>Category</th><th>Status</th><th class="text-end">Actions</th></tr></thead>
+      <tbody id="trainingcourses-table-body"><tr><td colspan="4" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Activity Modal -->
+<div class="modal fade" id="activityModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="activity-form" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title" id="activityModalLabel">Add Activity</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="activity-id">
+          <div class="mb-3">
+            <label class="form-label">Name</label>
+            <input type="text" class="form-control" id="activity-name" required maxlength="100">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Category</label>
+            <input type="text" class="form-control" id="activity-category" maxlength="50" placeholder="e.g. Digital Skills">
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" id="activity-active" checked>
+            <label class="form-check-label" for="activity-active">Active</label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="activity-save-btn">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Visitor Type Modal -->
+<div class="modal fade" id="visitorTypeModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="visitortype-form" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title" id="visitorTypeModalLabel">Add Visitor Type</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="visitortype-id">
+          <div class="mb-3">
+            <label class="form-label">Name</label>
+            <input type="text" class="form-control" id="visitortype-name" required maxlength="100">
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" id="visitortype-active" checked>
+            <label class="form-check-label" for="visitortype-active">Active</label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="visitortype-save-btn">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Age Band Modal -->
+<div class="modal fade" id="ageBandModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="ageband-form" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title" id="ageBandModalLabel">Add Age Band</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="ageband-id">
+          <div class="mb-3">
+            <label class="form-label">Label</label>
+            <input type="text" class="form-control" id="ageband-label" required maxlength="50" placeholder="e.g. 18-24">
+          </div>
+          <div class="row">
+            <div class="col mb-3">
+              <label class="form-label">Min Age</label>
+              <input type="number" class="form-control" id="ageband-min" required min="0">
+            </div>
+            <div class="col mb-3">
+              <label class="form-label">Max Age <span class="text-muted">(blank = and above)</span></label>
+              <input type="number" class="form-control" id="ageband-max" min="0">
+            </div>
+          </div>
+          <div class="form-check mb-2">
+            <input class="form-check-input" type="checkbox" id="ageband-youth">
+            <label class="form-check-label" for="ageband-youth">Counts as Youth</label>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" id="ageband-active" checked>
+            <label class="form-check-label" for="ageband-active">Active</label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="ageband-save-btn">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Hub Schedule Modal -->
+<div class="modal fade" id="hubScheduleModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="hubschedule-form" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title">Set Hub Open Hours</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="hubschedule-hubid">
+          <div class="mb-3">
+            <label class="form-label">Hub</label>
+            <input type="text" class="form-control" id="hubschedule-hubname" disabled>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Open Days</label>
+            <div class="d-flex flex-wrap gap-2" id="hubschedule-days">
+              <div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" value="1" id="day-1"><label class="form-check-label" for="day-1">Mon</label></div>
+              <div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" value="2" id="day-2"><label class="form-check-label" for="day-2">Tue</label></div>
+              <div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" value="3" id="day-3"><label class="form-check-label" for="day-3">Wed</label></div>
+              <div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" value="4" id="day-4"><label class="form-check-label" for="day-4">Thu</label></div>
+              <div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" value="5" id="day-5"><label class="form-check-label" for="day-5">Fri</label></div>
+              <div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" value="6" id="day-6"><label class="form-check-label" for="day-6">Sat</label></div>
+              <div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" value="0" id="day-0"><label class="form-check-label" for="day-0">Sun</label></div>
+            </div>
+          </div>
+          <div class="row">
+            <div class="col mb-3">
+              <label class="form-label">Opens <span class="text-muted fw-normal">(24-hour, e.g. 09:00)</span></label>
+              <input type="text" class="form-control" id="hubschedule-open" placeholder="09:00" pattern="([01][0-9]|2[0-3]):[0-5][0-9]" required>
+            </div>
+            <div class="col mb-3">
+              <label class="form-label">Closes <span class="text-muted fw-normal">(24-hour, e.g. 16:00)</span></label>
+              <input type="text" class="form-control" id="hubschedule-close" placeholder="16:00" pattern="([01][0-9]|2[0-3]):[0-5][0-9]" required>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="hubschedule-save-btn">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Training Course Modal -->
+<div class="modal fade" id="trainingCourseModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="trainingcourse-form" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title" id="trainingCourseModalLabel">Add Training Course</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="trainingcourse-id">
+          <div class="mb-3">
+            <label class="form-label">Name</label>
+            <input type="text" class="form-control" id="trainingcourse-name" required maxlength="100">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Category</label>
+            <input type="text" class="form-control" id="trainingcourse-category" maxlength="50" placeholder="e.g. Digital Skills">
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" id="trainingcourse-active" checked>
+            <label class="form-check-label" for="trainingcourse-active">Active</label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="trainingcourse-save-btn">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Delete Confirmation Modal (shared) -->
+<div class="modal fade" id="usageConfigDeleteModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Delete</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        Are you sure you want to delete <strong id="delete-usageconfig-name"></strong>? This cannot be undone.
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-danger" id="confirm-delete-usageconfig">Delete</button>
+      </div>
+    </div>
+  </div>
+</div>

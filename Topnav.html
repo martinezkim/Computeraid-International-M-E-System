@@ -1,0 +1,93 @@
+<header class="topnav">
+  <div class="d-flex align-items-center gap-3">
+    <button class="btn-icon d-lg-none" id="sidebar-toggle"><i class="bi bi-list"></i></button>
+    <div class="topnav-title" id="page-title">Dashboard</div>
+  </div>
+
+  <div class="topnav-right d-flex align-items-center gap-2">
+    <button class="btn-icon position-relative" id="chat-bell" data-bs-toggle="offcanvas" data-bs-target="#chatPanel" aria-controls="chatPanel" title="Chat">
+      <i class="bi bi-chat-dots"></i>
+      <span class="badge rounded-pill bg-danger d-none" id="chat-badge" style="position:absolute; top:-2px; right:-2px; font-size:0.6rem;">0</span>
+    </button>
+    <div class="dropdown">
+      <button class="btn-icon position-relative" id="notification-bell" data-bs-toggle="dropdown" aria-expanded="false" title="Notifications">
+        <i class="bi bi-bell"></i>
+        <span class="badge rounded-pill bg-danger d-none" id="notification-badge" style="position:absolute; top:-2px; right:-2px; font-size:0.6rem;">0</span>
+      </button>
+      <div class="dropdown-menu dropdown-menu-end p-0" style="width: 340px; max-height: 420px; overflow-y: auto;" id="notification-dropdown">
+        <div class="d-flex justify-content-between align-items-center px-3 py-2 border-bottom">
+          <strong class="small">Notifications</strong>
+          <button type="button" class="btn btn-link btn-sm p-0 small" id="btn-mark-all-read">Mark all read</button>
+        </div>
+        <div id="notification-list"><p class="text-muted text-center small py-4">Loading…</p></div>
+      </div>
+    </div>
+    <span class="user-chip">
+      <span class="avatar-dot">
+        <img id="topnav-avatar-img" src="" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:999px;display:none;">
+        <i class="bi bi-person-fill" id="topnav-avatar-icon"></i>
+      </span>
+      <span id="current-user-email">Loading…</span>
+    </span>
+    <button class="btn btn-sm btn-light d-none" id="btn-logout" title="Sign out">
+      <i class="bi bi-box-arrow-right"></i>
+    </button>
+  </div>
+</header>
+
+<!-- Device approval modal (app-shell-level — opened from a bell notification or the MyDevices page, see DeviceRequestsJS.html) -->
+<div class="modal fade" id="deviceApprovalModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-hdd-network"></i> New Device Wants to Join</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body text-center" id="device-approval-body">
+        <p class="text-muted small py-4">Loading…</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>
+        <button type="button" class="btn btn-danger" id="btn-device-reject">Reject</button>
+        <button type="button" class="btn btn-success" id="btn-device-approve">Approve</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Chat panel — internal 1-to-1 messaging, see Chat.gs / ChatJS.html -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="chatPanel" aria-labelledby="chatPanelLabel" style="width:380px;">
+  <div class="offcanvas-header border-bottom">
+    <h5 class="offcanvas-title" id="chatPanelLabel">Chat</h5>
+    <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+  </div>
+  <div class="offcanvas-body d-flex flex-column p-0">
+    <!-- List view: existing conversations + people you can start one with -->
+    <div id="chat-list-view" class="d-flex flex-column flex-grow-1" style="min-height:0;">
+      <div class="p-2 border-bottom">
+        <input type="text" class="form-control form-control-sm" id="chat-contact-search" placeholder="Search people…">
+      </div>
+      <div class="flex-grow-1 overflow-auto" id="chat-list-scroll">
+        <div id="chat-threads-list"></div>
+        <div class="px-2 pt-2 pb-1 text-muted small border-top mt-1">Start a new conversation</div>
+        <div id="chat-contacts-list"></div>
+      </div>
+    </div>
+
+    <!-- Conversation view -->
+    <div id="chat-conversation-view" class="d-none flex-column flex-grow-1" style="min-height:0;">
+      <div class="p-2 border-bottom d-flex align-items-center gap-2">
+        <button type="button" class="btn btn-sm btn-light" id="btn-chat-back"><i class="bi bi-arrow-left"></i></button>
+        <div>
+          <div class="fw-medium small" id="chat-conversation-name">—</div>
+          <div class="text-muted" id="chat-conversation-role" style="font-size:0.72rem;"></div>
+        </div>
+      </div>
+      <div class="flex-grow-1 overflow-auto p-2" id="chat-messages-list" style="min-height:0;"></div>
+      <form id="chat-message-form" class="p-2 border-top d-flex gap-2">
+        <input type="text" class="form-control form-control-sm" id="chat-message-input" placeholder="Type a message…" maxlength="2000" autocomplete="off">
+        <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-send"></i></button>
+      </form>
+    </div>
+  </div>
+</div>

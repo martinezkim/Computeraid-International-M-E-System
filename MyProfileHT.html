@@ -1,0 +1,136 @@
+<div class="page-header">
+  <div>
+    <h4>My Profile</h4>
+    <p>Your contact details and payment information — Finance uses your bank/mobile money details when processing salary and reimbursement payouts.</p>
+  </div>
+</div>
+
+<div class="alert alert-warning d-none" id="profile-completion-banner" role="alert">
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <span><i class="bi bi-info-circle"></i> <strong>Complete your profile</strong> — fill in every field below so Finance has what it needs to pay you.</span>
+    <span class="fw-bold" id="profile-completion-pct">0%</span>
+  </div>
+  <div class="progress" style="height:8px;">
+    <div class="progress-bar bg-warning" id="profile-completion-bar" role="progressbar" style="width:0%;"></div>
+  </div>
+</div>
+
+<div class="card-surface mb-4">
+  <div class="d-flex align-items-center gap-3 mb-3">
+    <div id="profile-photo-wrap" style="width:72px;height:72px;border-radius:50%;overflow:hidden;background:#f4f5fa;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+      <img id="profile-photo-img" src="" alt="" style="width:100%;height:100%;object-fit:cover;display:none;">
+      <i class="bi bi-person-fill text-muted" id="profile-photo-placeholder" style="font-size:2rem;"></i>
+    </div>
+    <div>
+      <div class="fw-medium" id="profile-name">Loading…</div>
+      <div class="text-muted small" id="profile-hub"></div>
+      <label class="btn btn-sm btn-light mt-1 mb-0">
+        <i class="bi bi-camera"></i> Change Photo
+        <input type="file" accept="image/*" id="profile-photo-input" class="d-none">
+      </label>
+      <span class="text-muted small ms-1" id="profile-photo-status"></span>
+    </div>
+  </div>
+</div>
+
+<div class="card-surface mb-4">
+  <h6 class="mb-3">Login Email</h6>
+  <div class="d-flex align-items-center gap-2">
+    <input type="email" class="form-control" id="profile-email" disabled style="max-width:340px;">
+    <button type="button" class="btn btn-light" id="btn-request-email-change">Request Email Change</button>
+  </div>
+  <p class="text-muted small mt-2 mb-0">Email is your login ID and can't be edited directly — requesting a change notifies your Admin, who will action it.</p>
+</div>
+
+<div class="card-surface mb-4">
+  <h6 class="mb-3">Contact &amp; Address</h6>
+  <form id="profile-contact-form" novalidate>
+    <div class="row">
+      <div class="col-md-6 mb-3">
+        <label class="form-label">Phone</label>
+        <input type="tel" class="form-control" id="profile-phone" placeholder="e.g. +254 700 000000">
+      </div>
+      <div class="col-md-6 mb-3">
+        <label class="form-label">Address</label>
+        <input type="text" class="form-control" id="profile-address" maxlength="300">
+      </div>
+    </div>
+
+    <hr>
+    <p class="text-muted small mb-2">Payment details — used by Finance for your salary/reimbursement payouts. Leave an account/number field blank to keep what's already on file.</p>
+    <div class="row">
+      <div class="col-md-4 mb-3">
+        <label class="form-label">Bank Name</label>
+        <input type="text" class="form-control" id="profile-bankname" maxlength="150">
+      </div>
+      <div class="col-md-4 mb-3">
+        <label class="form-label">Account Name</label>
+        <input type="text" class="form-control" id="profile-bankaccountname" maxlength="150">
+      </div>
+      <div class="col-md-4 mb-3">
+        <label class="form-label">Account Number</label>
+        <input type="text" class="form-control" id="profile-bankaccountnumber" placeholder="">
+      </div>
+    </div>
+    <div class="row">
+      <div class="col-md-3 mb-3">
+        <label class="form-label">Bank Code</label>
+        <input type="text" class="form-control" id="profile-bankcode" maxlength="20">
+      </div>
+      <div class="col-md-3 mb-3">
+        <label class="form-label">Swift Code</label>
+        <input type="text" class="form-control" id="profile-swiftcode" maxlength="20">
+      </div>
+      <div class="col-md-3 mb-3">
+        <label class="form-label">Branch</label>
+        <input type="text" class="form-control" id="profile-bankbranch" maxlength="100">
+      </div>
+      <div class="col-md-3 mb-3">
+        <label class="form-label">Branch Code</label>
+        <input type="text" class="form-control" id="profile-branchcode" maxlength="20">
+      </div>
+    </div>
+    <div class="row">
+      <div class="col-md-4 mb-3">
+        <label class="form-label">Mobile Money Provider</label>
+        <input type="text" class="form-control" id="profile-mmprovider" placeholder="e.g. M-Pesa" maxlength="60">
+      </div>
+      <div class="col-md-4 mb-3">
+        <label class="form-label">Mobile Money Name</label>
+        <input type="text" class="form-control" id="profile-mmname" maxlength="150">
+      </div>
+      <div class="col-md-4 mb-3">
+        <label class="form-label">Mobile Money Number</label>
+        <input type="text" class="form-control" id="profile-mmnumber" placeholder="">
+      </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary" id="profile-save-btn">Save Changes</button>
+  </form>
+</div>
+
+<!-- Request Email Change Modal -->
+<div class="modal fade" id="requestEmailChangeModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="request-email-form" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title">Request Email Change</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <p class="text-muted small">This notifies your Admin, who will action the change — your login stays on the current email until then.</p>
+          <div class="mb-3">
+            <label class="form-label">New Email</label>
+            <input type="email" class="form-control" id="request-email-new" required>
+          </div>
+          <div class="alert alert-success py-2 px-3 small d-none" id="request-email-result"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>
+          <button type="submit" class="btn btn-primary" id="request-email-btn">Send Request</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>

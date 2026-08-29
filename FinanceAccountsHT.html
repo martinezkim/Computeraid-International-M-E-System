@@ -1,0 +1,437 @@
+<div class="page-header">
+  <div>
+    <h4>Bank Accounts &amp; Funding</h4>
+    <p>Financial accounts, funds received, and controlled balance adjustments</p>
+  </div>
+</div>
+
+<div class="pill-tabs animate-float-up">
+  <button type="button" class="pill-tab active" data-tab="accounts">Accounts</button>
+  <button type="button" class="pill-tab" data-tab="funding">Funding Received</button>
+  <button type="button" class="pill-tab" data-tab="adjustments">Adjustments</button>
+  <button type="button" class="pill-tab" data-tab="reconciliation">Reconciliation</button>
+</div>
+
+<!-- Accounts -->
+<div class="card-surface usage-config-pane" id="pane-accounts">
+  <div class="toolbar mb-3">
+    <h6 class="mb-0 flex-grow-1">Financial Accounts</h6>
+    <select class="form-select w-auto" id="accounts-country-filter"><option value="">All Countries</option></select>
+    <select class="form-select w-auto" id="accounts-hub-filter"><option value="">All Hubs</option></select>
+    <button class="btn btn-primary btn-sm" id="btn-add-account"><i class="bi bi-plus-lg"></i> Add Account</button>
+  </div>
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Account</th><th>Bank</th><th>Number</th><th>Currency</th><th>Type</th><th>Hub</th><th>Status</th><th class="text-end">Actions</th></tr></thead>
+      <tbody id="accounts-table-body"><tr><td colspan="8" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Funding -->
+<div class="card-surface usage-config-pane d-none" id="pane-funding">
+  <div class="toolbar mb-3">
+    <h6 class="mb-0 flex-grow-1">Funding Received</h6>
+    <select class="form-select w-auto" id="funding-country-filter"><option value="">All Countries</option></select>
+    <select class="form-select w-auto" id="funding-hub-filter"><option value="">All Hubs</option></select>
+    <button class="btn btn-primary btn-sm" id="btn-add-funding"><i class="bi bi-plus-lg"></i> Record Funding</button>
+  </div>
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Date</th><th>Source</th><th>Account</th><th>Amount</th><th>Status</th><th class="text-end">Actions</th></tr></thead>
+      <tbody id="funding-table-body"><tr><td colspan="6" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Adjustments -->
+<div class="card-surface usage-config-pane d-none" id="pane-adjustments">
+  <div class="toolbar mb-3">
+    <h6 class="mb-0 flex-grow-1">Balance Adjustments</h6>
+    <select class="form-select w-auto" id="adjustments-country-filter"><option value="">All Countries</option></select>
+    <button class="btn btn-primary btn-sm" id="btn-add-adjustment"><i class="bi bi-plus-lg"></i> New Adjustment</button>
+  </div>
+  <p class="text-muted small">The only sanctioned way to correct a calculated balance outside normal funding/expenditure. Requires a reason, and must be approved by a different Admin from whoever raised it.</p>
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Date</th><th>Account</th><th>Amount</th><th>Reason</th><th>Status</th><th class="text-end">Actions</th></tr></thead>
+      <tbody id="adjustments-table-body"><tr><td colspan="6" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Reconciliation -->
+<div class="card-surface usage-config-pane d-none" id="pane-reconciliation">
+  <div class="toolbar mb-3">
+    <h6 class="mb-0 flex-grow-1">Bank Statements</h6>
+    <select class="form-select w-auto" id="reconciliation-country-filter"><option value="">All Countries</option></select>
+    <button class="btn btn-primary btn-sm" id="btn-upload-statement"><i class="bi bi-upload"></i> Upload Statement</button>
+  </div>
+  <p class="text-muted small">CSV bank statements only for now. Reconciliation compares against the CURRENT system balance, not a historical point-in-time balance — reconcile a statement soon after its period for a meaningful comparison.</p>
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Account</th><th>Statement Date</th><th class="text-end">Opening</th><th class="text-end">Closing</th><th>Transactions</th><th>Status</th><th class="text-end">Actions</th></tr></thead>
+      <tbody id="statements-table-body"><tr><td colspan="7" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Account Modal -->
+<div class="modal fade" id="financeAccountModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <form id="financeaccount-form" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title" id="financeAccountModalLabel">Add Account</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="financeaccount-id">
+          <div class="row">
+            <div class="col mb-3">
+              <label class="form-label">Account Name</label>
+              <input type="text" class="form-control" id="financeaccount-name" required maxlength="100" placeholder="e.g. CAI Project Account">
+            </div>
+            <div class="col mb-3">
+              <label class="form-label">Bank Name <span class="text-muted">(optional)</span></label>
+              <input type="text" class="form-control" id="financeaccount-bankname" maxlength="100">
+            </div>
+          </div>
+          <div class="row">
+            <div class="col mb-3">
+              <label class="form-label">Account Number <span class="text-muted">(optional — masked everywhere after saving)</span></label>
+              <input type="text" class="form-control" id="financeaccount-accountnumber" maxlength="40">
+            </div>
+            <div class="col mb-3">
+              <label class="form-label">Account Type</label>
+              <select class="form-select" id="financeaccount-type" required>
+                <option value="Bank">Bank</option>
+                <option value="Mobile Money">Mobile Money</option>
+                <option value="Cash">Cash</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+          </div>
+          <div class="row">
+            <div class="col mb-3">
+              <label class="form-label">Currency</label>
+              <select class="form-select" id="financeaccount-currency" required></select>
+              <div class="form-text" id="financeaccount-currency-note"></div>
+            </div>
+            <div class="col mb-3">
+              <label class="form-label">Hub <span class="text-muted">(optional)</span></label>
+              <select class="form-select" id="financeaccount-hubid"><option value="">— Org-wide —</option></select>
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Project <span class="text-muted">(optional)</span></label>
+            <select class="form-select" id="financeaccount-projectid"><option value="">— None —</option></select>
+          </div>
+          <div class="row">
+            <div class="col mb-3">
+              <label class="form-label">Opening Balance</label>
+              <input type="number" class="form-control" id="financeaccount-openingbalance" step="0.01" min="0" required>
+              <div class="form-text" id="financeaccount-opening-locked-note"></div>
+            </div>
+            <div class="col mb-3">
+              <label class="form-label">Opening Balance Date</label>
+              <input type="date" class="form-control" id="financeaccount-openingdate" required>
+            </div>
+          </div>
+          <div class="mb-3" id="financeaccount-status-wrap" style="display:none;">
+            <label class="form-label">Status</label>
+            <select class="form-select" id="financeaccount-status">
+              <option value="Active">Active</option>
+              <option value="Closed">Closed</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="financeaccount-save-btn">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Funding Modal -->
+<div class="modal fade" id="fundingModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <form id="funding-form" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title">Record Funding</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="row">
+            <div class="col mb-3">
+              <label class="form-label">Date Received</label>
+              <input type="date" class="form-control" id="funding-date" required>
+            </div>
+            <div class="col mb-3">
+              <label class="form-label">Amount</label>
+              <input type="number" class="form-control" id="funding-amount" step="0.01" min="0" required>
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Account</label>
+            <select class="form-select" id="funding-accountid" required></select>
+          </div>
+          <div class="row">
+            <div class="col mb-3">
+              <label class="form-label">Funding Source</label>
+              <input type="text" class="form-control" id="funding-source" required maxlength="150" placeholder="e.g. Computer Aid International">
+            </div>
+            <div class="col mb-3">
+              <label class="form-label">Donor <span class="text-muted">(optional)</span></label>
+              <input type="text" class="form-control" id="funding-donor" maxlength="150">
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Project <span class="text-muted">(optional)</span></label>
+            <select class="form-select" id="funding-projectid"><option value="">— None —</option></select>
+          </div>
+          <div class="row">
+            <div class="col mb-3">
+              <label class="form-label">Reference Number <span class="text-muted">(optional)</span></label>
+              <input type="text" class="form-control" id="funding-reference" maxlength="80">
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Description <span class="text-muted">(optional)</span></label>
+            <textarea class="form-control" id="funding-description" maxlength="500" rows="2"></textarea>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Proof of Transfer <span class="text-muted">(optional)</span></label>
+            <input type="file" class="form-control" id="funding-document-input" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls">
+            <div id="funding-document-status" class="mt-1"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="funding-save-btn">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Adjustment Modal -->
+<div class="modal fade" id="adjustmentModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="adjustment-form" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title">New Balance Adjustment</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label">Account</label>
+            <select class="form-select" id="adjustment-accountid" required></select>
+          </div>
+          <div class="row">
+            <div class="col mb-3">
+              <label class="form-label">Date</label>
+              <input type="date" class="form-control" id="adjustment-date" required>
+            </div>
+            <div class="col mb-3">
+              <label class="form-label">Amount <span class="text-muted">(+ increases, − decreases)</span></label>
+              <input type="number" class="form-control" id="adjustment-amount" step="0.01" required>
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Reason</label>
+            <textarea class="form-control" id="adjustment-reason" required maxlength="500" rows="2"></textarea>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Supporting Document <span class="text-muted">(optional)</span></label>
+            <input type="file" class="form-control" id="adjustment-document-input" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls">
+            <div id="adjustment-document-status" class="mt-1"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="adjustment-save-btn">Submit for Approval</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Cancel/Reject Reason Modal (shared) -->
+<div class="modal fade" id="financeReasonModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="financeReasonModalLabel">Reason</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <textarea class="form-control" id="finance-reason-text" maxlength="500" rows="3" placeholder="Explain why…"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-danger" id="confirm-finance-reason">Confirm</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Upload Statement Modal -->
+<div class="modal fade" id="uploadStatementModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Upload Bank Statement</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row">
+          <div class="col mb-3">
+            <label class="form-label">Account</label>
+            <select class="form-select" id="statement-accountid" required></select>
+          </div>
+          <div class="col mb-3">
+            <label class="form-label">Statement Date <span class="text-muted">(period end)</span></label>
+            <input type="date" class="form-control" id="statement-date" required>
+          </div>
+        </div>
+        <div class="row">
+          <div class="col mb-3">
+            <label class="form-label">Opening Balance <span class="text-muted">(as shown on the statement)</span></label>
+            <input type="number" class="form-control" id="statement-openingbalance" step="0.01" required>
+          </div>
+          <div class="col mb-3">
+            <label class="form-label">Closing Balance <span class="text-muted">(as shown on the statement)</span></label>
+            <input type="number" class="form-control" id="statement-closingbalance" step="0.01" required>
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Statement File (CSV)</label>
+          <input type="file" class="form-control" id="statement-csv-input" accept=".csv">
+          <div class="form-text">Also archived as a supporting document for this statement.</div>
+          <div id="statement-document-status" class="mt-1"></div>
+        </div>
+
+        <div id="statement-mapping-section" class="d-none">
+          <hr>
+          <h6 class="mb-2">Map Columns</h6>
+          <p class="text-muted small">Preview of the first rows — tell us which column is which.</p>
+          <div class="table-responsive mb-3">
+            <table class="table table-sm" id="statement-preview-table"></table>
+          </div>
+          <div class="row">
+            <div class="col mb-3">
+              <label class="form-label">Date Column</label>
+              <select class="form-select" id="statement-col-date"></select>
+            </div>
+            <div class="col mb-3">
+              <label class="form-label">Description Column</label>
+              <select class="form-select" id="statement-col-desc"></select>
+            </div>
+          </div>
+          <div class="mb-2">
+            <div class="form-check form-check-inline">
+              <input class="form-check-input" type="radio" name="statement-amount-mode" id="statement-mode-single" value="single" checked>
+              <label class="form-check-label" for="statement-mode-single">Single Amount column (+/-)</label>
+            </div>
+            <div class="form-check form-check-inline">
+              <input class="form-check-input" type="radio" name="statement-amount-mode" id="statement-mode-debitcredit" value="debitcredit">
+              <label class="form-check-label" for="statement-mode-debitcredit">Separate Debit / Credit columns</label>
+            </div>
+          </div>
+          <div class="row" id="statement-single-amount-row">
+            <div class="col mb-3">
+              <label class="form-label">Amount Column</label>
+              <select class="form-select" id="statement-col-amount"></select>
+            </div>
+          </div>
+          <div class="row d-none" id="statement-debitcredit-row">
+            <div class="col mb-3">
+              <label class="form-label">Debit Column</label>
+              <select class="form-select" id="statement-col-debit"></select>
+            </div>
+            <div class="col mb-3">
+              <label class="form-label">Credit Column</label>
+              <select class="form-select" id="statement-col-credit"></select>
+            </div>
+          </div>
+          <div class="text-muted small" id="statement-rowcount"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary d-none" id="btn-import-statement">Import Statement</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Statement Detail Modal -->
+<div class="modal fade" id="statementDetailModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-xl">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="statementDetailTitle">Statement</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="statement-reconciliation-panel" class="card-surface mb-3"></div>
+        <div class="toolbar mb-2">
+          <h6 class="mb-0 flex-grow-1">Transactions</h6>
+          <button class="btn btn-light btn-sm" id="btn-automatch-statement"><i class="bi bi-magic"></i> Auto-Match</button>
+        </div>
+        <div class="table-responsive">
+          <table class="table align-middle table-sm">
+            <thead><tr><th>Date</th><th>Description</th><th class="text-end">Amount</th><th>Match</th><th class="text-end">Actions</th></tr></thead>
+            <tbody id="statement-transactions-body"><tr><td colspan="5" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Match Candidate Picker Modal -->
+<div class="modal fade" id="matchCandidateModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Match to a Record</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="match-candidates-list"><p class="text-muted text-center py-4">Loading…</p></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Resolve Reconciliation Modal -->
+<div class="modal fade" id="resolveReconciliationModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Resolve Reconciliation</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted small">Explain what the difference was and how it was investigated. This does not change any balance.</p>
+        <textarea class="form-control" id="resolve-reconciliation-notes" maxlength="500" rows="3" placeholder="Explain…"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="confirm-resolve-reconciliation">Resolve</button>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,177 @@
+<script>
+(function () {
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'financedashboard') return;
+    if (!window.MNE_CURRENT_USER || window.MNE_CURRENT_USER.role !== 'Admin') return;
+    initFinanceDashboardPage();
+  });
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  function initFinanceDashboardPage() {
+    document.getElementById('finance-dashboard-country-filter').addEventListener('change', fetchDashboard);
+    document.getElementById('finance-dashboard-hub-filter').addEventListener('change', fetchDashboard);
+    loadFilterOptions().then(fetchDashboard);
+  }
+
+  function loadFilterOptions() {
+    return Promise.all([
+      runServer('getHubOptions', token()),
+      runServer('getCountryOptions', token())
+    ]).then(function (results) {
+      var hubsRes = results[0], countriesRes = results[1];
+      if (hubsRes.success) {
+        document.getElementById('finance-dashboard-hub-filter').innerHTML = '<option value="">All Hubs</option>' +
+          hubsRes.data.map(function (h) { return '<option value="' + h.id + '">' + escapeHtml(h.name) + '</option>'; }).join('');
+      }
+      if (countriesRes.success) {
+        document.getElementById('finance-dashboard-country-filter').innerHTML = '<option value="">All Countries</option>' +
+          countriesRes.data.map(function (c) { return '<option value="' + c.id + '">' + escapeHtml(c.name) + '</option>'; }).join('');
+      }
+    });
+  }
+
+  function fetchDashboard() {
+    var tbody = document.getElementById('finance-accounts-table-body');
+    tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">Loading…</td></tr>';
+
+    var options = {
+      countryId: document.getElementById('finance-dashboard-country-filter').value,
+      hubId: document.getElementById('finance-dashboard-hub-filter').value
+    };
+    runServer('getFinancialDashboard', token(), options).then(function (res) {
+      if (!res.success) {
+        tbody.innerHTML = '<tr><td colspan="9" class="text-danger text-center py-4">' + res.message + '</td></tr>';
+        return;
+      }
+      renderAlerts(res.data.alerts);
+      renderCurrencySummaries(res.data.byCurrency);
+      renderConvertedSummary(res.data.converted);
+      renderAccountsTable(res.data.accounts);
+    });
+  }
+
+  /**
+   * An OPTIONAL supplement to the per-currency cards above — only
+   * shown when accounts actually span more than one currency. Never
+   * replaces the native per-currency figures; always labeled
+   * "converted" and lists which currencies (if any) are missing a
+   * logged rate and were left out of the total rather than guessed.
+   */
+  function renderConvertedSummary(converted) {
+    var el = document.getElementById('finance-converted-summary');
+    if (!converted || !converted.hasMultipleCurrencies) { el.innerHTML = ''; return; }
+
+    var t = converted.totals;
+    var html = '<div class="card-surface">' +
+      '<div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-2">' +
+        '<h6 class="mb-0">Combined View — converted to ' + escapeHtml(converted.systemCurrency) + ' <span class="text-muted small fw-normal">(approximate, using manually-logged rates)</span></h6>' +
+        '<a href="#" onclick="loadPage(\'financeconfig\'); return false;" class="small">Manage exchange rates <i class="bi bi-arrow-right"></i></a>' +
+      '</div>' +
+      '<div class="mini-stat-grid">' +
+        statCard('bi-wallet2', formatCurrencyIn(t.currentBankBalance, converted.systemCurrency), 'Current Bank Balance', null) +
+        statCard('bi-clipboard-check', formatCurrencyIn(t.committedFunds, converted.systemCurrency), 'Committed (Approved, Unpaid)', null) +
+        statCard('bi-piggy-bank', formatCurrencyIn(t.availableAfterCommitments, converted.systemCurrency), 'Available After Commitments', null) +
+        statCard('bi-hourglass-split', formatCurrencyIn(t.pendingApproval, converted.systemCurrency), 'Pending Approval', null) +
+      '</div>' +
+      (converted.excludedCurrencies.length
+        ? '<div class="alert alert-warning small mt-2 mb-0"><i class="bi bi-exclamation-triangle"></i> No exchange rate logged for ' + escapeHtml(converted.excludedCurrencies.join(', ')) + ' — excluded from this total.</div>'
+        : '') +
+    '</div>';
+    el.innerHTML = html;
+    el.querySelectorAll('[data-goto]').forEach(function (card) {
+      card.addEventListener('click', function () { loadPage(card.dataset.goto); });
+    });
+  }
+
+  function renderAlerts(alerts) {
+    var el = document.getElementById('finance-alerts');
+    var banners = [];
+    if (alerts.invoicesAwaitingApproval > 0) {
+      banners.push(alertBanner('info', 'bi-hourglass-split', alerts.invoicesAwaitingApproval + ' invoice(s) awaiting approval.', 'invoices'));
+    }
+    if (alerts.expensesAwaitingApproval > 0 || alerts.reimbursementsAwaitingApproval > 0) {
+      var total = (alerts.expensesAwaitingApproval || 0) + (alerts.reimbursementsAwaitingApproval || 0);
+      banners.push(alertBanner('info', 'bi-hourglass-split', total + ' expense/reimbursement request(s) awaiting approval.', 'expenses'));
+    }
+    if (alerts.fundingUnconfirmed > 0) {
+      banners.push(alertBanner('info', 'bi-cash-coin', alerts.fundingUnconfirmed + ' funding entr' + (alerts.fundingUnconfirmed === 1 ? 'y' : 'ies') + ' recorded but not yet confirmed.', 'financeaccounts'));
+    }
+    if (alerts.missingReceipts > 0) {
+      banners.push(alertBanner('warning', 'bi-receipt-cutoff', alerts.missingReceipts + ' approved/paid expense(s) or reimbursement(s) have no receipt attached.', 'expenses'));
+    }
+    if (alerts.budgetsAtRisk && alerts.budgetsAtRisk.length) {
+      var exceeded = alerts.budgetsAtRisk.filter(function (b) { return b.warningLevel === 'exceeded'; });
+      var approaching = alerts.budgetsAtRisk.filter(function (b) { return b.warningLevel === 'approaching'; });
+      if (exceeded.length) {
+        banners.push(alertBanner('danger', 'bi-exclamation-triangle', exceeded.length + ' budget line(s) have exceeded their budget: ' +
+          escapeHtml(exceeded.map(function (b) { return b.budgetName + ' / ' + b.category; }).join(', ')) + '.', 'budgets'));
+      }
+      if (approaching.length) {
+        banners.push(alertBanner('warning', 'bi-exclamation-circle', approaching.length + ' budget line(s) are approaching their limit (75%+): ' +
+          escapeHtml(approaching.map(function (b) { return b.budgetName + ' / ' + b.category; }).join(', ')) + '.', 'budgets'));
+      }
+    }
+    if (alerts.lowBalanceAccounts && alerts.lowBalanceAccounts.length) {
+      var names = alerts.lowBalanceAccounts.map(function (a) { return a.accountName; }).join(', ');
+      banners.push(alertBanner('danger', 'bi-exclamation-triangle', 'Available balance is below the configured threshold for: ' + escapeHtml(names) + '.', 'financeaccounts'));
+    }
+    el.innerHTML = banners.join('');
+    el.querySelectorAll('[data-goto]').forEach(function (btn) {
+      btn.addEventListener('click', function () { loadPage(btn.dataset.goto); });
+    });
+  }
+
+  /** Every alert links through to the page where the underlying records live — the drill-down for this dashboard. */
+  function alertBanner(level, icon, text, gotoPage) {
+    return '<div class="alert alert-' + level + ' d-flex align-items-center justify-content-between gap-2 mb-2">' +
+      '<span><i class="bi ' + icon + '"></i> ' + text + '</span>' +
+      (gotoPage ? '<button type="button" class="btn btn-sm btn-light" data-goto="' + gotoPage + '">View <i class="bi bi-arrow-right"></i></button>' : '') +
+    '</div>';
+  }
+
+  function renderCurrencySummaries(byCurrency) {
+    var el = document.getElementById('finance-currency-summaries');
+    if (!byCurrency.length) { el.innerHTML = '<p class="text-muted">No financial accounts set up yet — add one under Bank Accounts &amp; Funding.</p>'; return; }
+
+    el.innerHTML = byCurrency.map(function (c) {
+      return '<div class="mb-2"><h6 class="text-muted mb-2">' + escapeHtml(c.currency) + '</h6>' +
+        '<div class="mini-stat-grid">' +
+          statCard('bi-wallet2', formatCurrencyIn(c.currentBankBalance, c.currency), 'Current Bank Balance', 'financeaccounts') +
+          statCard('bi-clipboard-check', formatCurrencyIn(c.committedFunds, c.currency), 'Committed (Approved, Unpaid)', 'invoices') +
+          statCard('bi-piggy-bank', formatCurrencyIn(c.availableAfterCommitments, c.currency), 'Available After Commitments', null) +
+          statCard('bi-hourglass-split', formatCurrencyIn(c.pendingApproval, c.currency), 'Pending Approval', 'invoices') +
+          statCard('bi-graph-up-arrow', formatCurrencyIn(c.fundingConfirmed, c.currency), 'Funding Received (Confirmed)', 'financeaccounts') +
+          statCard('bi-receipt', formatCurrencyIn(c.paidExpenditure, c.currency), 'Paid Expenditure', 'expenses') +
+        '</div></div>';
+    }).join('');
+    el.querySelectorAll('[data-goto]').forEach(function (card) {
+      card.addEventListener('click', function () { loadPage(card.dataset.goto); });
+    });
+  }
+
+  /** Drill-down: a card with a gotoPage navigates to the page listing the records behind that figure — the underlying Invoices/Expenses/Funding tables already have their own filters once there. */
+  function statCard(icon, value, label, gotoPage) {
+    var clickable = gotoPage ? ' data-goto="' + gotoPage + '" style="cursor:pointer" title="View underlying records"' : '';
+    return '<div class="mini-stat-card"' + clickable + '><i class="bi ' + icon + ' mini-stat-icon"></i><div class="mini-stat-value">' + value + '</div><div class="mini-stat-label">' + label + '</div></div>';
+  }
+
+  function renderAccountsTable(accounts) {
+    var tbody = document.getElementById('finance-accounts-table-body');
+    if (!accounts.length) { tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">No accounts yet.</td></tr>'; return; }
+    tbody.innerHTML = accounts.map(function (a) {
+      return '<tr>' +
+        '<td class="fw-medium">' + escapeHtml(a.accountName) + '</td>' +
+        '<td>' + escapeHtml(a.currency) + '</td>' +
+        '<td class="text-end">' + formatCurrencyIn(a.openingBalance, a.currency) + '</td>' +
+        '<td class="text-end">' + formatCurrencyIn(a.fundingConfirmed, a.currency) + '</td>' +
+        '<td class="text-end">' + formatCurrencyIn(a.paidExpenditure, a.currency) + '</td>' +
+        '<td class="text-end fw-medium">' + formatCurrencyIn(a.currentBankBalance, a.currency) + '</td>' +
+        '<td class="text-end">' + formatCurrencyIn(a.committedFunds, a.currency) + '</td>' +
+        '<td class="text-end fw-medium">' + formatCurrencyIn(a.availableAfterCommitments, a.currency) + '</td>' +
+        '<td class="text-end text-muted">' + formatCurrencyIn(a.pendingApproval, a.currency) + '</td>' +
+      '</tr>';
+    }).join('');
+  }
+})();
+</script>

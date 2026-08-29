@@ -1,0 +1,326 @@
+<script>
+(function () {
+  var state = { search: '', sortBy: 'HubName', sortDir: 'asc', page: 1, pageSize: 10, countryId: '' };
+  var hubModal, deleteModal, hubDetailModal, pendingDeleteId;
+  var countryOptions = [];
+  var healthByHub = {};
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'hubs') return;
+    initHubsPage();
+  });
+
+  function initHubsPage() {
+    state = { search: '', sortBy: 'HubName', sortDir: 'asc', page: 1, pageSize: 10, countryId: '' };
+    hubModal = new bootstrap.Modal(document.getElementById('hubModal'));
+    deleteModal = new bootstrap.Modal(document.getElementById('hubDeleteModal'));
+    hubDetailModal = new bootstrap.Modal(document.getElementById('hubDetailModal'));
+
+    document.getElementById('btn-add-hub').addEventListener('click', openAddModal);
+    document.getElementById('hub-form').addEventListener('submit', handleSave);
+    document.getElementById('confirm-delete-hub').addEventListener('click', handleConfirmDelete);
+
+    document.getElementById('hub-search').addEventListener('input', debounce(function (e) {
+      state.search = e.target.value;
+      state.page = 1;
+      fetchHubs();
+    }, 350));
+
+    document.getElementById('hub-country-filter').addEventListener('change', function (e) {
+      state.countryId = e.target.value;
+      state.page = 1;
+      fetchHubs();
+    });
+
+    document.getElementById('hub-page-size').addEventListener('change', function (e) {
+      state.pageSize = parseInt(e.target.value, 10);
+      state.page = 1;
+      fetchHubs();
+    });
+
+    document.querySelectorAll('.sortable').forEach(function (th) {
+      th.style.cursor = 'pointer';
+      th.addEventListener('click', function () {
+        var col = th.dataset.sort;
+        if (state.sortBy === col) {
+          state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+          state.sortBy = col;
+          state.sortDir = 'asc';
+        }
+        fetchHubs();
+      });
+    });
+
+    // loadCountryOptions (dropdown options) and loadHealthSummary (badge
+    // data fetchHubs's renderTable needs) don't depend on each other —
+    // run them in parallel. fetchHubs itself still has to wait for
+    // healthByHub to be populated before it renders, so it stays after.
+    Promise.all([loadCountryOptions(), loadHealthSummary()]).then(fetchHubs);
+  }
+
+  function loadHealthSummary() {
+    var token = localStorage.getItem(MNE_SESSION_KEY);
+    return runServer('getAllHubsHealthSummary', token).then(function (res) {
+      healthByHub = res.success ? res.data : {};
+    }).catch(function () { healthByHub = {}; });
+  }
+
+  function loadCountryOptions() {
+    return runServer('getCountryOptions', token()).then(function (res) {
+      countryOptions = res.success ? res.data : [];
+
+      var filterSelect = document.getElementById('hub-country-filter');
+      filterSelect.innerHTML = '<option value="">All Countries</option>' +
+        countryOptions.map(function (c) { return '<option value="' + c.id + '">' + escapeHtml(c.name) + '</option>'; }).join('');
+
+      var formSelect = document.getElementById('hub-country');
+      formSelect.innerHTML = '<option value="">Select a country…</option>' +
+        countryOptions.map(function (c) { return '<option value="' + c.id + '">' + escapeHtml(c.name) + '</option>'; }).join('');
+    });
+  }
+
+  function fetchHubs() {
+    var tbody = document.getElementById('hubs-table-body');
+    tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">Loading…</td></tr>';
+
+    runServer('getHubs', token(), state).then(function (res) {
+      if (!res.success) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-danger text-center py-4">' + res.message + '</td></tr>';
+        return;
+      }
+      renderTable(res.data.records);
+      renderSummary(res.data.pagination);
+      renderPagination('hubs-pagination', res.data.pagination, function (p) {
+        state.page = p;
+        fetchHubs();
+      });
+    }).catch(function (err) {
+      tbody.innerHTML = '<tr><td colspan="7" class="text-danger text-center py-4">' + err.message + '</td></tr>';
+    });
+  }
+
+  function renderTable(records) {
+    var tbody = document.getElementById('hubs-table-body');
+    if (!records.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">No hubs found.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = records.map(function (h) {
+      var badge = h.Status === 'Active' ? 'badge-active' : 'badge-inactive';
+      var health = healthByHub[h.HubID];
+      var snapshot = health
+        ? (
+            '<div class="d-flex flex-column gap-1" style="font-size:.74rem;">' +
+              '<span><i class="bi bi-file-earmark-text"></i> ' + health.reportsSubmittedThisYear + ' report(s)' +
+                (health.reportingCompliancePct !== null ? ' · ' + health.reportingCompliancePct + '% on quota' : '') + '</span>' +
+              '<span><i class="bi bi-box-seam"></i> ' + health.inventoryTotalAssets + ' asset(s)' +
+                (health.equipmentAvailabilityPct !== null ? ' · ' + health.equipmentAvailabilityPct + '% available' : '') + '</span>' +
+              (health.healthScore !== null
+                ? '<span class="badge ' + healthScoreBadgeClass(health.healthScore) + '" style="width:fit-content;">Health ' + health.healthScore + '%</span>'
+                : '<span class="text-muted">Health: no data yet</span>') +
+            '</div>'
+          )
+        : '<span class="text-muted">—</span>';
+
+      return (
+        '<tr>' +
+          '<td class="text-muted">' + h.HubID + '</td>' +
+          '<td class="fw-medium">' + escapeHtml(h.HubName) + '</td>' +
+          '<td>' + escapeHtml(h.CountryName || '—') + '</td>' +
+          '<td>' + escapeHtml(h.Town || '—') + '</td>' +
+          '<td><span class="badge ' + badge + '">' + h.Status + '</span></td>' +
+          '<td>' + snapshot + '</td>' +
+          '<td class="text-end">' +
+            '<button class="btn btn-sm btn-light me-1" onclick="viewHubDetail(\'' + h.HubID + '\')" title="View details"><i class="bi bi-eye"></i></button>' +
+            '<button class="btn btn-sm btn-light me-1" onclick="editHub(\'' + h.HubID + '\')" title="Edit"><i class="bi bi-pencil"></i></button>' +
+            '<button class="btn btn-sm btn-light text-danger" onclick="promptDeleteHub(\'' + h.HubID + '\', \'' + escapeHtml(h.HubName).replace(/'/g, "\\'") + '\')" title="Delete"><i class="bi bi-trash"></i></button>' +
+          '</td>' +
+        '</tr>'
+      );
+    }).join('');
+  }
+
+  function healthScoreBadgeClass(score) {
+    if (score >= 75) return 'badge-active';
+    if (score >= 50) return 'badge-status-underrepair';
+    return 'badge-status-faulty';
+  }
+
+  function renderSummary(p) {
+    var el = document.getElementById('hubs-summary');
+    var start = (p.page - 1) * p.pageSize + 1;
+    var end = Math.min(p.page * p.pageSize, p.totalRecords);
+    el.textContent = p.totalRecords === 0 ? 'No records' : ('Showing ' + start + '–' + end + ' of ' + p.totalRecords);
+  }
+
+  function openAddModal() {
+    var form = document.getElementById('hub-form');
+    form.reset();
+    form.classList.remove('was-validated');
+    document.getElementById('hub-id').value = '';
+    // Pre-select the active country filter, if any, as a convenience.
+    document.getElementById('hub-country').value = state.countryId || '';
+    setEnabledTabCheckboxes_([]);
+    document.getElementById('hubModalLabel').textContent = 'Add Hub';
+    hubModal.show();
+  }
+
+  function setEnabledTabCheckboxes_(enabledTabs) {
+    document.querySelectorAll('.hub-optional-tab').forEach(function (cb) {
+      cb.checked = enabledTabs.indexOf(cb.value) !== -1;
+    });
+  }
+
+  function collectEnabledTabCheckboxes_() {
+    return Array.prototype.map.call(
+      document.querySelectorAll('.hub-optional-tab:checked'),
+      function (cb) { return cb.value; }
+    );
+  }
+
+  window.editHub = function (id) {
+    runServer('getHubs', token(), { search: '', page: 1, pageSize: 100000 }).then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      var record = res.data.records.find(function (h) { return h.HubID === id; });
+      if (!record) return;
+
+      document.getElementById('hub-id').value = record.HubID;
+      document.getElementById('hub-name').value = record.HubName;
+      document.getElementById('hub-country').value = record.CountryID;
+      document.getElementById('hub-county').value = record.CountyOrState || '';
+      document.getElementById('hub-town').value = record.Town || '';
+      document.getElementById('hub-address').value = record.Address || '';
+      document.getElementById('hub-status').value = record.Status;
+      var enabledTabs = String(record.EnabledOptionalTabs || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+      setEnabledTabCheckboxes_(enabledTabs);
+      document.getElementById('hubModalLabel').textContent = 'Edit Hub';
+      document.getElementById('hub-form').classList.remove('was-validated');
+      hubModal.show();
+    });
+  };
+
+  function handleSave(e) {
+    e.preventDefault();
+
+    var form = document.getElementById('hub-form');
+    if (!form.checkValidity()) {
+      form.classList.add('was-validated');
+      return;
+    }
+
+    var id = document.getElementById('hub-id').value;
+    var data = {
+      HubName: document.getElementById('hub-name').value.trim(),
+      CountryID: document.getElementById('hub-country').value,
+      CountyOrState: document.getElementById('hub-county').value.trim(),
+      Town: document.getElementById('hub-town').value.trim(),
+      Address: document.getElementById('hub-address').value.trim(),
+      Status: document.getElementById('hub-status').value,
+      EnabledOptionalTabs: collectEnabledTabCheckboxes_()
+    };
+
+    var saveBtn = document.getElementById('hub-save-btn');
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving…';
+
+    var call = id ? runServer('updateHub', token(), id, data) : runServer('addHub', token(), data);
+
+    call.then(function (res) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save Hub';
+      if (!res.success) {
+        showToast(res.message, 'danger');
+        return;
+      }
+      hubModal.hide();
+      showToast(id ? 'Hub updated successfully.' : 'Hub added successfully.', 'success');
+      fetchHubs();
+    }).catch(function (err) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save Hub';
+      showToast(err.message, 'danger');
+    });
+  }
+
+  window.viewHubDetail = function (id) {
+    document.getElementById('hub-detail-name').textContent = 'Loading…';
+    document.getElementById('hub-detail-subtitle').textContent = '';
+    document.getElementById('hub-detail-body').innerHTML = '<div class="text-center text-muted py-4">Loading…</div>';
+    hubDetailModal.show();
+
+    var token = localStorage.getItem(MNE_SESSION_KEY);
+    runServer('getHubDetailOverview', token, id).then(function (res) {
+      if (!res.success) {
+        document.getElementById('hub-detail-body').innerHTML = '<div class="alert alert-danger">' + res.message + '</div>';
+        return;
+      }
+      renderHubDetail(res.data.hub, res.data.health);
+    }).catch(function (err) {
+      document.getElementById('hub-detail-body').innerHTML = '<div class="alert alert-danger">' + err.message + '</div>';
+    });
+  };
+
+  function renderHubDetail(hub, m) {
+    document.getElementById('hub-detail-name').textContent = hub.HubName;
+    document.getElementById('hub-detail-subtitle').textContent = (hub.CountryName || '') + (hub.Town ? ' · ' + hub.Town : '');
+
+    var pct = function (v) { return v === null || v === undefined ? '—' : v + '%'; };
+
+    document.getElementById('hub-detail-body').innerHTML =
+      '<div class="row g-3 mb-4">' +
+        '<div class="col-6 col-md-3"><div class="detail-stat"><div class="detail-stat-value">' + m.reportsSubmittedThisYear + '</div><div class="detail-stat-label">Reports (' + escapeHtml(m.currentYearLabel) + ')</div></div></div>' +
+        '<div class="col-6 col-md-3"><div class="detail-stat"><div class="detail-stat-value">' + pct(m.reportingCompliancePct) + '</div><div class="detail-stat-label">Quota Compliance</div></div></div>' +
+        '<div class="col-6 col-md-3"><div class="detail-stat"><div class="detail-stat-value">' + m.inventoryTotalAssets + '</div><div class="detail-stat-label">Total Assets</div></div></div>' +
+        '<div class="col-6 col-md-3"><div class="detail-stat"><div class="detail-stat-value">' + (m.healthScore === null ? '—' : m.healthScore + '%') + '</div><div class="detail-stat-label">Health Score</div></div></div>' +
+      '</div>' +
+
+      '<h6 class="mb-2"><i class="bi bi-pc-display"></i> Computers (Desktops + Laptops)</h6>' +
+      '<div class="row g-2 mb-3">' +
+        '<div class="col-4 col-md-2"><div class="detail-stat"><div class="detail-stat-value">' + m.computers.total + '</div><div class="detail-stat-label">Total</div></div></div>' +
+        '<div class="col-4 col-md-2"><div class="detail-stat"><div class="detail-stat-value">' + m.computers.inUse + '</div><div class="detail-stat-label">In Use</div></div></div>' +
+        '<div class="col-4 col-md-2"><div class="detail-stat"><div class="detail-stat-value">' + m.computers.inStorage + '</div><div class="detail-stat-label">In Storage</div></div></div>' +
+        '<div class="col-4 col-md-2"><div class="detail-stat"><div class="detail-stat-value">' + m.computers.underRepair + '</div><div class="detail-stat-label">Under Repair</div></div></div>' +
+        '<div class="col-4 col-md-2"><div class="detail-stat"><div class="detail-stat-value">' + m.computers.faulty + '</div><div class="detail-stat-label">Faulty</div></div></div>' +
+        '<div class="col-4 col-md-2"><div class="detail-stat"><div class="detail-stat-value">' + m.computers.decommissioned + '</div><div class="detail-stat-label">Decommissioned</div></div></div>' +
+      '</div>' +
+      '<div class="row g-3 mb-4">' +
+        '<div class="col-4"><div class="detail-stat"><div class="detail-stat-value">' + pct(m.equipmentAvailabilityPct) + '</div><div class="detail-stat-label">Equipment Availability</div></div></div>' +
+        '<div class="col-4"><div class="detail-stat"><div class="detail-stat-value">' + pct(m.equipmentUtilizationPct) + '</div><div class="detail-stat-label">Equipment Utilization</div></div></div>' +
+        '<div class="col-4"><div class="detail-stat"><div class="detail-stat-value">' + (m.computerToBeneficiaryRatio === null ? '—' : ('1 : ' + m.computerToBeneficiaryRatio)) + '</div><div class="detail-stat-label">Computer : Beneficiary</div></div></div>' +
+      '</div>' +
+
+      '<h6 class="mb-2"><i class="bi bi-laptop"></i> Laptops for Sale</h6>' +
+      '<div class="row g-3">' +
+        '<div class="col-4"><div class="detail-stat"><div class="detail-stat-value">' + m.laptopSales.currentStock + '</div><div class="detail-stat-label">Current Stock</div></div></div>' +
+        '<div class="col-4"><div class="detail-stat"><div class="detail-stat-value">' + m.laptopSales.sold + '</div><div class="detail-stat-label">Sold</div></div></div>' +
+        '<div class="col-4"><div class="detail-stat"><div class="detail-stat-value">' + m.laptopSales.faulty + '</div><div class="detail-stat-label">Faulty</div></div></div>' +
+      '</div>';
+  }
+
+  window.promptDeleteHub = function (id, name) {
+    pendingDeleteId = id;
+    document.getElementById('delete-hub-name').textContent = name;
+    deleteModal.show();
+  };
+
+  function handleConfirmDelete() {
+    if (!pendingDeleteId) return;
+    runServer('deleteHub', token(), pendingDeleteId).then(function (res) {
+      deleteModal.hide();
+      if (!res.success) {
+        showToast(res.message, 'danger');
+        return;
+      }
+      showToast('Hub deleted.', 'success');
+      fetchHubs();
+    }).catch(function (err) {
+      deleteModal.hide();
+      showToast(err.message, 'danger');
+    });
+  }
+})();
+</script>

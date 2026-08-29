@@ -1,0 +1,340 @@
+<script>
+(function () {
+  var state = { search: '', sortBy: 'FirstName', sortDir: 'asc', page: 1, pageSize: 10 };
+  var adminModal, accessModal, resendModal, editModal, deleteModal;
+  var pendingAccessEmail, pendingResendEmail, pendingEditEmail, pendingDeleteEmail;
+  var currentRecords = [];
+  var countryOptions = [];
+
+  var ACCESS_LEVEL_LABELS = {
+    SuperAdmin: 'Super Admin',
+    CountryDirector: 'Country Director',
+    MELead: 'M&E Lead',
+    Accountant: 'Accountant'
+  };
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'admins') return;
+    initAdminsPage();
+  });
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  function initAdminsPage() {
+    state = { search: '', sortBy: 'FirstName', sortDir: 'asc', page: 1, pageSize: 10 };
+    adminModal = new bootstrap.Modal(document.getElementById('adminModal'));
+    accessModal = new bootstrap.Modal(document.getElementById('adminAccessModal'));
+    resendModal = new bootstrap.Modal(document.getElementById('adminResendModal'));
+    editModal = new bootstrap.Modal(document.getElementById('adminEditModal'));
+    deleteModal = new bootstrap.Modal(document.getElementById('adminDeleteModal'));
+
+    document.getElementById('btn-add-admin').addEventListener('click', openAddModal);
+    document.getElementById('admin-form').addEventListener('submit', handleSave);
+    document.getElementById('admin-edit-form').addEventListener('submit', handleEditSave);
+    document.getElementById('confirm-access-change').addEventListener('click', handleConfirmAccessChange);
+    document.getElementById('confirm-resend-admin').addEventListener('click', handleConfirmResend);
+    document.getElementById('confirm-delete-admin').addEventListener('click', handleConfirmDelete);
+
+    document.getElementById('admin-accesslevel').addEventListener('change', function () {
+      toggleCountryGroup('admin-accesslevel', 'admin-country-group');
+    });
+    document.getElementById('access-admin-level').addEventListener('change', function () {
+      toggleCountryGroup('access-admin-level', 'access-country-group');
+    });
+
+    document.getElementById('admin-search').addEventListener('input', debounce(function (e) {
+      state.search = e.target.value;
+      state.page = 1;
+      fetchAdmins();
+    }, 350));
+
+    document.querySelectorAll('.sortable').forEach(function (th) {
+      th.style.cursor = 'pointer';
+      th.addEventListener('click', function () {
+        var col = th.dataset.sort;
+        if (state.sortBy === col) {
+          state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+          state.sortBy = col;
+          state.sortDir = 'asc';
+        }
+        fetchAdmins();
+      });
+    });
+
+    loadCountryOptions().then(fetchAdmins);
+  }
+
+  function loadCountryOptions() {
+    return runServer('getCountryOptions', token()).then(function (res) {
+      countryOptions = res.success ? res.data : [];
+      var optionsHtml = '<option value="">All countries (unscoped)</option>' +
+        countryOptions.map(function (c) { return '<option value="' + c.id + '">' + escapeHtml(c.name) + '</option>'; }).join('');
+      document.getElementById('admin-country').innerHTML = optionsHtml;
+      document.getElementById('access-admin-country').innerHTML = optionsHtml;
+    }).catch(function () { countryOptions = []; });
+  }
+
+  function toggleCountryGroup(levelSelectId, groupId) {
+    var isCountryDirector = document.getElementById(levelSelectId).value === 'CountryDirector';
+    document.getElementById(groupId).style.display = isCountryDirector ? '' : 'none';
+  }
+
+  function fetchAdmins() {
+    var tbody = document.getElementById('admins-table-body');
+    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">Loading…</td></tr>';
+
+    runServer('getAdmins', token(), state).then(function (res) {
+      if (!res.success) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-danger text-center py-4">' + res.message + '</td></tr>';
+        return;
+      }
+      currentRecords = res.data.records;
+      renderTable(currentRecords);
+      renderSummary(res.data.pagination);
+      renderPagination('admins-pagination', res.data.pagination, function (p) {
+        state.page = p;
+        fetchAdmins();
+      });
+    }).catch(function (err) {
+      tbody.innerHTML = '<tr><td colspan="5" class="text-danger text-center py-4">' + err.message + '</td></tr>';
+    });
+  }
+
+  function renderTable(records) {
+    var tbody = document.getElementById('admins-table-body');
+    if (!records.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">No administrators found.</td></tr>';
+      return;
+    }
+
+    var myEmail = (window.MNE_CURRENT_USER && window.MNE_CURRENT_USER.email) || '';
+
+    tbody.innerHTML = records.map(function (a) {
+      var statusBadge = a.Status === 'Active' ? 'badge-active' : 'badge-inactive';
+      var fullName = (a.FirstName + ' ' + a.LastName).trim();
+      var emailAttr = escapeHtml(a.Email).replace(/'/g, "\\'");
+      var nameAttr = escapeHtml(fullName).replace(/'/g, "\\'");
+      var firstNameAttr = escapeHtml(a.FirstName || '').replace(/'/g, "\\'");
+      var lastNameAttr = escapeHtml(a.LastName || '').replace(/'/g, "\\'");
+      var isSelf = a.Email === myEmail;
+
+      return (
+        '<tr>' +
+          '<td class="fw-medium">' + escapeHtml(fullName) + (isSelf ? ' <span class="text-muted small">(you)</span>' : '') + '</td>' +
+          '<td class="text-muted">' + escapeHtml(a.Email) + '</td>' +
+          '<td>' + escapeHtml(ACCESS_LEVEL_LABELS[a.AccessLevel] || a.AccessLevel) + '</td>' +
+          '<td class="text-muted">' + (a.CountryName ? escapeHtml(a.CountryName) : (a.AccessLevel === 'CountryDirector' ? '<span class="text-muted small">All countries</span>' : '<span class="text-muted small">—</span>')) + '</td>' +
+          '<td><span class="badge ' + statusBadge + '">' + a.Status + '</span></td>' +
+          '<td class="text-end">' +
+            '<button class="btn btn-sm btn-light me-1" onclick="promptEditAdmin(\'' + emailAttr + '\', \'' + firstNameAttr + '\', \'' + lastNameAttr + '\')" title="Edit name/email"><i class="bi bi-pencil"></i></button>' +
+            (isSelf ? '' :
+              '<button class="btn btn-sm btn-light me-1" onclick="promptAccessChange(\'' + emailAttr + '\', \'' + nameAttr + '\')" title="Change access level"><i class="bi bi-shield-lock"></i></button>' +
+              '<button class="btn btn-sm btn-light me-1" onclick="promptResendAdmin(\'' + emailAttr + '\', \'' + nameAttr + '\')" title="Resend credentials"><i class="bi bi-envelope-arrow-up"></i></button>' +
+              '<button class="btn btn-sm btn-light me-1" onclick="toggleAdminStatus(\'' + emailAttr + '\', \'' + (a.Status === 'Active' ? 'Inactive' : 'Active') + '\')" title="' + (a.Status === 'Active' ? 'Deactivate' : 'Activate') + '"><i class="bi bi-power"></i></button>' +
+              '<button class="btn btn-sm btn-light text-danger" onclick="promptDeleteAdmin(\'' + emailAttr + '\', \'' + nameAttr + '\')" title="Delete permanently"><i class="bi bi-trash"></i></button>') +
+          '</td>' +
+        '</tr>'
+      );
+    }).join('');
+  }
+
+  function renderSummary(p) {
+    var el = document.getElementById('admins-summary');
+    var start = (p.page - 1) * p.pageSize + 1;
+    var end = Math.min(p.page * p.pageSize, p.totalRecords);
+    el.textContent = p.totalRecords === 0 ? 'No records' : ('Showing ' + start + '–' + end + ' of ' + p.totalRecords);
+  }
+
+  function openAddModal() {
+    var form = document.getElementById('admin-form');
+    form.reset();
+    form.classList.remove('was-validated');
+    document.getElementById('admin-accesslevel').value = 'CountryDirector';
+    document.getElementById('admin-country').value = '';
+    toggleCountryGroup('admin-accesslevel', 'admin-country-group');
+    adminModal.show();
+  }
+
+  function handleSave(e) {
+    e.preventDefault();
+
+    var form = document.getElementById('admin-form');
+    if (!form.checkValidity()) {
+      form.classList.add('was-validated');
+      return;
+    }
+
+    var data = {
+      FirstName: document.getElementById('admin-firstname').value.trim(),
+      LastName: document.getElementById('admin-lastname').value.trim(),
+      Email: document.getElementById('admin-email').value.trim(),
+      AccessLevel: document.getElementById('admin-accesslevel').value,
+      CountryID: document.getElementById('admin-country').value
+    };
+
+    var saveBtn = document.getElementById('admin-save-btn');
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Creating & emailing…';
+
+    runServer('addAdmin', token(), data).then(function (res) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Add Administrator';
+      if (!res.success) {
+        showToast(res.message, 'danger');
+        return;
+      }
+      adminModal.hide();
+      showToast('Administrator created — a welcome email with login details was sent.', 'success');
+      fetchAdmins();
+    }).catch(function (err) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Add Administrator';
+      showToast(err.message, 'danger');
+    });
+  }
+
+  window.promptAccessChange = function (email, name) {
+    pendingAccessEmail = email;
+    document.getElementById('access-admin-name').textContent = name;
+    var current = currentRecords.find(function (a) { return a.Email === email; });
+    document.getElementById('access-admin-level').value = current ? current.AccessLevel : 'CountryDirector';
+    document.getElementById('access-admin-country').value = (current && current.CountryID) || '';
+    toggleCountryGroup('access-admin-level', 'access-country-group');
+    accessModal.show();
+  };
+
+  function handleConfirmAccessChange() {
+    if (!pendingAccessEmail) return;
+    var level = document.getElementById('access-admin-level').value;
+    var countryId = document.getElementById('access-admin-country').value;
+    var btn = document.getElementById('confirm-access-change');
+    btn.disabled = true;
+
+    runServer('updateAdminAccessLevel', token(), pendingAccessEmail, level, countryId).then(function (res) {
+      btn.disabled = false;
+      accessModal.hide();
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Access level updated.', 'success');
+      fetchAdmins();
+    }).catch(function (err) {
+      btn.disabled = false;
+      accessModal.hide();
+      showToast(err.message, 'danger');
+    });
+  }
+
+  window.toggleAdminStatus = function (email, nextStatus) {
+    runServer('updateAdminStatus', token(), email, nextStatus).then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Administrator ' + (nextStatus === 'Active' ? 'activated' : 'deactivated') + '.', 'success');
+      fetchAdmins();
+    });
+  };
+
+  window.promptResendAdmin = function (email, name) {
+    pendingResendEmail = email;
+    document.getElementById('resend-admin-name').textContent = name;
+    resendModal.show();
+  };
+
+  function handleConfirmResend() {
+    if (!pendingResendEmail) return;
+    var btn = document.getElementById('confirm-resend-admin');
+    btn.disabled = true;
+    btn.textContent = 'Sending…';
+
+    runServer('resendAdminCredentials', token(), pendingResendEmail).then(function (res) {
+      btn.disabled = false;
+      btn.textContent = 'Resend Credentials';
+      resendModal.hide();
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('New credentials sent to ' + res.data.Email + '.', 'success');
+      fetchAdmins();
+    }).catch(function (err) {
+      btn.disabled = false;
+      btn.textContent = 'Resend Credentials';
+      resendModal.hide();
+      showToast(err.message, 'danger');
+    });
+  }
+
+  window.promptEditAdmin = function (email, firstName, lastName) {
+    pendingEditEmail = email;
+    var form = document.getElementById('admin-edit-form');
+    form.classList.remove('was-validated');
+    document.getElementById('edit-admin-firstname').value = firstName;
+    document.getElementById('edit-admin-lastname').value = lastName;
+    document.getElementById('edit-admin-email').value = email;
+    var myEmail = (window.MNE_CURRENT_USER && window.MNE_CURRENT_USER.email) || '';
+    var emailField = document.getElementById('edit-admin-email');
+    var isSelf = email === myEmail;
+    emailField.disabled = isSelf;
+    document.getElementById('edit-admin-email-help').textContent = isSelf
+      ? 'You cannot change your own email — ask another Super Admin to update it.'
+      : 'Changing this moves the account to a new email — their password stays the same.';
+    editModal.show();
+  };
+
+  function handleEditSave(e) {
+    e.preventDefault();
+    if (!pendingEditEmail) return;
+
+    var form = document.getElementById('admin-edit-form');
+    if (!form.checkValidity()) {
+      form.classList.add('was-validated');
+      return;
+    }
+
+    var data = {
+      FirstName: document.getElementById('edit-admin-firstname').value.trim(),
+      LastName: document.getElementById('edit-admin-lastname').value.trim(),
+      Email: document.getElementById('edit-admin-email').value.trim()
+    };
+
+    var saveBtn = document.getElementById('admin-edit-save-btn');
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving…';
+
+    runServer('updateAdminProfile', token(), pendingEditEmail, data).then(function (res) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save Changes';
+      if (!res.success) {
+        showToast(res.message, 'danger');
+        return;
+      }
+      editModal.hide();
+      showToast('Administrator updated.', 'success');
+      fetchAdmins();
+    }).catch(function (err) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save Changes';
+      showToast(err.message, 'danger');
+    });
+  }
+
+  window.promptDeleteAdmin = function (email, name) {
+    pendingDeleteEmail = email;
+    document.getElementById('delete-admin-name').textContent = name;
+    deleteModal.show();
+  };
+
+  function handleConfirmDelete() {
+    if (!pendingDeleteEmail) return;
+    var btn = document.getElementById('confirm-delete-admin');
+    btn.disabled = true;
+
+    runServer('deleteAdmin', token(), pendingDeleteEmail).then(function (res) {
+      btn.disabled = false;
+      deleteModal.hide();
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Administrator deleted.', 'success');
+      fetchAdmins();
+    }).catch(function (err) {
+      btn.disabled = false;
+      deleteModal.hide();
+      showToast(err.message, 'danger');
+    });
+  }
+})();
+</script>

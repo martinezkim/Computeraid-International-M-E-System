@@ -1,0 +1,70 @@
+<div class="page-header">
+  <div>
+    <h4>Financial Reports</h4>
+    <p>Monthly, project, hub, and category breakdowns — every figure traceable to the underlying paid/committed records</p>
+  </div>
+</div>
+
+<div class="pill-tabs animate-float-up">
+  <button type="button" class="pill-tab active" data-tab="monthly">Monthly</button>
+  <button type="button" class="pill-tab" data-tab="project">By Project</button>
+  <button type="button" class="pill-tab" data-tab="hub">By Hub</button>
+  <button type="button" class="pill-tab" data-tab="category">By Category</button>
+</div>
+
+<!-- Monthly -->
+<div class="card-surface usage-config-pane" id="pane-monthly">
+  <div class="toolbar mb-3">
+    <input type="month" class="form-control w-auto" id="report-month">
+    <select class="form-select w-auto" id="monthly-country-filter"><option value="">All Countries</option></select>
+    <select class="form-select w-auto" id="monthly-hub-filter"><option value="">All Hubs</option></select>
+    <button class="btn btn-light btn-sm" id="btn-export-monthly"><i class="bi bi-download"></i> Export</button>
+  </div>
+  <div class="mini-stat-grid mb-3" id="monthly-report-totals"></div>
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Category</th><th class="text-end">Paid Amount</th></tr></thead>
+      <tbody id="monthly-report-table-body"><tr><td colspan="2" class="text-center text-muted py-4">Choose a month.</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- By Project -->
+<div class="card-surface usage-config-pane d-none" id="pane-project">
+  <div class="toolbar mb-3">
+    <select class="form-select w-auto" id="project-country-filter"><option value="">All Countries</option></select>
+    <select class="form-select w-auto" id="report-project"><option value="">Select a project…</option></select>
+    <button class="btn btn-light btn-sm" id="btn-export-project"><i class="bi bi-download"></i> Export</button>
+  </div>
+  <div id="project-report-body"><p class="text-muted text-center py-4">Choose a project.</p></div>
+</div>
+
+<!-- By Hub -->
+<div class="card-surface usage-config-pane d-none" id="pane-hub">
+  <div class="toolbar mb-3">
+    <select class="form-select w-auto" id="hub-country-filter-report"><option value="">All Countries</option></select>
+    <select class="form-select w-auto" id="report-hub"><option value="">Select a hub…</option></select>
+    <button class="btn btn-light btn-sm" id="btn-export-hub"><i class="bi bi-download"></i> Export</button>
+  </div>
+  <div id="hub-report-body"><p class="text-muted text-center py-4">Choose a hub.</p></div>
+</div>
+
+<!-- By Category -->
+<div class="card-surface usage-config-pane d-none" id="pane-category">
+  <div class="toolbar mb-3">
+    <label class="small text-muted mb-0">From</label>
+    <input type="date" class="form-control w-auto" id="category-start-date">
+    <label class="small text-muted mb-0">To</label>
+    <input type="date" class="form-control w-auto" id="category-end-date">
+    <select class="form-select w-auto" id="category-country-filter"><option value="">All Countries</option></select>
+    <select class="form-select w-auto" id="category-hub-filter"><option value="">All Hubs</option></select>
+    <button class="btn btn-primary btn-sm" id="btn-run-category">Apply</button>
+    <button class="btn btn-light btn-sm" id="btn-export-category"><i class="bi bi-download"></i> Export</button>
+  </div>
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Category</th><th class="text-end">Paid</th><th class="text-end">Committed</th></tr></thead>
+      <tbody id="category-report-table-body"><tr><td colspan="3" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>

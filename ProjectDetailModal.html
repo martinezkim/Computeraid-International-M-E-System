@@ -1,0 +1,47 @@
+<div class="modal fade" id="projectDetailModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <h5 class="modal-title mb-0" id="project-detail-title">Project Report</h5>
+          <div class="text-muted small" id="project-detail-subtitle"></div>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-3 mb-4">
+          <div class="col-6 col-sm-3">
+            <div class="detail-stat">
+              <div class="detail-stat-value" id="detail-total">0</div>
+              <div class="detail-stat-label">Beneficiaries</div>
+            </div>
+          </div>
+          <div class="col-6 col-sm-3">
+            <div class="detail-stat">
+              <div class="detail-stat-value" id="detail-female">0</div>
+              <div class="detail-stat-label">Female</div>
+            </div>
+          </div>
+          <div class="col-6 col-sm-3">
+            <div class="detail-stat">
+              <div class="detail-stat-value" id="detail-male">0</div>
+              <div class="detail-stat-label">Male</div>
+            </div>
+          </div>
+          <div class="col-6 col-sm-3">
+            <div class="detail-stat">
+              <div class="detail-stat-value" id="detail-cost">$0</div>
+              <div class="detail-stat-label">Cost</div>
+            </div>
+          </div>
+        </div>
+
+        <h6 class="fw-bold small text-muted text-uppercase mb-3">Age Breakdown</h6>
+        <div id="detail-age-breakdown"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>

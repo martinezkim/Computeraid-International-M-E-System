@@ -1,0 +1,341 @@
+<div class="page-header">
+  <div>
+    <h4>Expenses &amp; Reimbursements</h4>
+    <p>Review, approve, and pay expenses, reimbursements, invoices, and salaries</p>
+  </div>
+</div>
+
+<div class="pill-tabs animate-float-up">
+  <button type="button" class="pill-tab active" data-tab="expenses">Expenses</button>
+  <button type="button" class="pill-tab" data-tab="reimbursements">Reimbursements</button>
+  <button type="button" class="pill-tab" data-tab="invoices">Invoices</button>
+  <button type="button" class="pill-tab" data-tab="salaries">Salaries</button>
+</div>
+
+<!-- Expenses -->
+<div class="card-surface usage-config-pane" id="pane-expenses">
+  <div class="toolbar mb-3">
+    <select class="form-select w-auto" id="expenses-country-filter"><option value="">All Countries</option></select>
+    <select class="form-select w-auto" id="expenses-hub-filter"><option value="">All Hubs</option></select>
+    <select class="form-select w-auto" id="expenses-status-filter">
+      <option value="">All Statuses</option>
+      <option value="pending">Pending Approval</option>
+      <option value="Approved">Approved</option>
+      <option value="Rejected">Rejected</option>
+      <option value="Returned">Returned</option>
+      <option value="Cancelled">Cancelled</option>
+    </select>
+  </div>
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Payee</th><th>Category</th><th>Hub</th><th class="text-end">Amount</th><th>Date</th><th>Status</th><th>Payment</th></tr></thead>
+      <tbody id="expenses-table-body"><tr><td colspan="7" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+  <div class="d-flex justify-content-between align-items-center mt-2">
+    <small class="text-muted" id="expenses-summary"></small>
+    <div id="expenses-pagination"></div>
+  </div>
+</div>
+
+<!-- Reimbursements -->
+<div class="card-surface usage-config-pane d-none" id="pane-reimbursements">
+  <div class="toolbar mb-3">
+    <select class="form-select w-auto" id="reimbursements-country-filter"><option value="">All Countries</option></select>
+    <select class="form-select w-auto" id="reimbursements-hub-filter"><option value="">All Hubs</option></select>
+    <select class="form-select w-auto" id="reimbursements-status-filter">
+      <option value="">All Statuses</option>
+      <option value="pending">Pending Approval</option>
+      <option value="Approved">Approved</option>
+      <option value="Rejected">Rejected</option>
+      <option value="Returned">Returned</option>
+      <option value="Cancelled">Cancelled</option>
+    </select>
+  </div>
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Staff</th><th>Category</th><th>Hub</th><th class="text-end">Requested</th><th class="text-end">Approved</th><th>Date</th><th>Status</th><th>Payment</th></tr></thead>
+      <tbody id="reimbursements-table-body"><tr><td colspan="8" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+  <div class="d-flex justify-content-between align-items-center mt-2">
+    <small class="text-muted" id="reimbursements-summary"></small>
+    <div id="reimbursements-pagination"></div>
+  </div>
+</div>
+
+<!-- Invoices -->
+<div class="card-surface usage-config-pane d-none" id="pane-invoices">
+  <div class="toolbar mb-3">
+    <div class="search-box">
+      <i class="bi bi-search"></i>
+      <input type="text" class="form-control" id="invoices-search" placeholder="Search payee, invoice #…">
+    </div>
+    <select class="form-select w-auto" id="invoices-country-filter"><option value="">All Countries</option></select>
+    <select class="form-select w-auto" id="invoices-hub-filter"><option value="">All Hubs</option></select>
+    <select class="form-select w-auto" id="invoices-status-filter">
+      <option value="">All Statuses</option>
+      <option value="pending">Pending Approval</option>
+      <option value="Approved">Approved</option>
+      <option value="Rejected">Rejected</option>
+      <option value="Returned">Returned</option>
+      <option value="Cancelled">Cancelled</option>
+    </select>
+  </div>
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Invoice #</th><th>Payee</th><th>Hub</th><th>Category</th><th class="text-end">Amount</th><th>Submitted</th><th>By</th><th>Status</th><th>Payment</th></tr></thead>
+      <tbody id="invoices-table-body"><tr><td colspan="9" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+  <div class="d-flex justify-content-between align-items-center mt-2">
+    <small class="text-muted" id="invoices-summary"></small>
+    <div id="invoices-pagination"></div>
+  </div>
+</div>
+
+<!-- Salaries -->
+<div class="card-surface usage-config-pane d-none" id="pane-salaries">
+  <!-- Stipend invoices — Hub-Manager-submitted invoices tagged "Monthly Stipends"
+       or categorized "Stipend/Salaries" are filed here instead of the plain
+       Invoices tab (see isStipendInvoice_/getStipendInvoices in Invoices.gs).
+       Still real Invoices underneath — clicking a row opens the same
+       approve/reject/pay workflow as the Invoices tab. -->
+  <div id="stipend-invoices-section" class="d-none mb-4">
+    <h6 class="mb-2">Stipend Invoices</h6>
+    <div class="table-responsive">
+      <table class="table align-middle">
+        <thead><tr><th>Invoice #</th><th>Payee</th><th>Hub</th><th class="text-end">Amount</th><th>Submitted</th><th>Status</th><th>Payment</th></tr></thead>
+        <tbody id="stipend-invoices-table-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="toolbar mb-3">
+    <select class="form-select w-auto" id="salaries-country-filter"><option value="">All Countries</option></select>
+    <select class="form-select w-auto" id="salaries-hub-filter"><option value="">All Hubs</option></select>
+    <input type="month" class="form-control w-auto" id="salaries-month-filter">
+    <button class="btn btn-light btn-sm" id="btn-clear-month-filter">Clear Month</button>
+    <button class="btn btn-primary btn-sm ms-auto" id="btn-add-salary"><i class="bi bi-plus-lg"></i> Add Salary Record</button>
+  </div>
+  <p class="text-muted small">Admin-only — individual salary rows are never sent to a Hub Manager. They see only their hub's aggregated staff cost on the Finance page.</p>
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Staff</th><th>Hub</th><th>Month</th><th class="text-end">Net Cost</th><th>Status</th><th>Payment</th></tr></thead>
+      <tbody id="salaries-table-body"><tr><td colspan="6" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+  <div class="d-flex justify-content-between align-items-center mt-2">
+    <small class="text-muted" id="salaries-summary"></small>
+    <div id="salaries-pagination"></div>
+  </div>
+</div>
+
+<!-- Detail Modal (shared: expense, reimbursement, or invoice) -->
+<div class="modal fade" id="financeRecordDetailModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="financeRecordDetailTitle">Details</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="financerecord-detail-reason-banner"></div>
+        <div id="financerecord-detail-fields" class="bendetail-grid"></div>
+      </div>
+      <div class="modal-footer flex-wrap gap-2" id="financerecord-detail-actions"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Approve Reimbursement Modal (lets Admin adjust the approved amount) -->
+<div class="modal fade" id="reimbursementApproveModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Approve Reimbursement</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted small">Approve the full amount requested, or adjust it down (e.g. to a policy-compliant rate).</p>
+        <div class="mb-3">
+          <label class="form-label">Approved Amount</label>
+          <input type="number" class="form-control" id="reimbursement-approved-amount" min="0" step="0.01">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="confirm-reimbursement-approve">Approve</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Reason Modal (Reject / Return / Cancel — shared) -->
+<div class="modal fade" id="financeRecordReasonModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="financeRecordReasonModalLabel">Reason</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <textarea class="form-control" id="financerecord-reason-text" maxlength="500" rows="3" placeholder="Explain why…"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-danger" id="confirm-financerecord-reason">Confirm</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Mark Paid Modal (shared) -->
+<div class="modal fade" id="financeRecordPaidModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Mark Paid</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label">Payment Date</label>
+          <input type="date" class="form-control" id="financerecord-payment-date">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Payment Reference <span class="text-muted">(optional)</span></label>
+          <input type="text" class="form-control" id="financerecord-payment-reference" maxlength="80">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="confirm-financerecord-paid">Mark Paid</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Add Salary Modal -->
+<div class="modal fade" id="salaryModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <form id="salary-form" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title">Add Salary Record</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="row">
+            <div class="col mb-3">
+              <label class="form-label">Staff</label>
+              <select class="form-select" id="salary-staffid" required></select>
+            </div>
+            <div class="col mb-3">
+              <label class="form-label">Month</label>
+              <input type="month" class="form-control" id="salary-month" required>
+            </div>
+          </div>
+          <div class="row">
+            <div class="col mb-3">
+              <label class="form-label">Hub</label>
+              <select class="form-select" id="salary-hubid" required></select>
+            </div>
+            <div class="col mb-3">
+              <label class="form-label">Project <span class="text-muted">(optional)</span></label>
+              <select class="form-select" id="salary-projectid"><option value="">— None —</option></select>
+            </div>
+          </div>
+          <div class="row">
+            <div class="col mb-3">
+              <label class="form-label">Gross Amount</label>
+              <input type="number" class="form-control" id="salary-grossamount" min="0" step="0.01" required>
+            </div>
+            <div class="col mb-3">
+              <label class="form-label">Allowances <span class="text-muted">(optional)</span></label>
+              <input type="number" class="form-control" id="salary-allowances" min="0" step="0.01">
+            </div>
+            <div class="col mb-3">
+              <label class="form-label">Deductions <span class="text-muted">(optional)</span></label>
+              <input type="number" class="form-control" id="salary-deductions" min="0" step="0.01">
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Account</label>
+            <select class="form-select" id="salary-accountid" required></select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Payroll Document <span class="text-muted">(optional)</span></label>
+            <input type="file" class="form-control" id="salary-document-input" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls">
+            <div id="salary-document-status" class="mt-1"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="salary-save-btn">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Salary Detail Modal -->
+<div class="modal fade" id="salaryDetailModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Salary Record</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="salarydetail-fields" class="bendetail-grid"></div>
+      </div>
+      <div class="modal-footer flex-wrap gap-2" id="salarydetail-actions"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Salary Cancel Modal -->
+<div class="modal fade" id="salaryCancelModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Cancel Salary Record</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <textarea class="form-control" id="salary-cancel-reason" maxlength="500" rows="2" placeholder="Reason…"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Back</button>
+        <button type="button" class="btn btn-danger" id="confirm-salary-cancel">Confirm Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Salary Mark Paid Modal -->
+<div class="modal fade" id="salaryPaidModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Mark Paid</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label">Payment Date</label>
+          <input type="date" class="form-control" id="salary-payment-date">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Payment Reference <span class="text-muted">(optional)</span></label>
+          <input type="text" class="form-control" id="salary-payment-reference" maxlength="80">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="confirm-salary-paid">Mark Paid</button>
+      </div>
+    </div>
+  </div>
+</div>

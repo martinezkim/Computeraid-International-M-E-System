@@ -1,0 +1,229 @@
+<script>
+(function () {
+  var state = { search: '', sortBy: 'YearLabel', sortDir: 'desc', page: 1, pageSize: 10 };
+  var quotaModal, deleteModal, pendingDeleteId;
+  var currentRecords = [];
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'quotas') return;
+    initQuotasPage();
+  });
+
+  function initQuotasPage() {
+    state = { search: '', sortBy: 'YearLabel', sortDir: 'desc', page: 1, pageSize: 10 };
+    quotaModal = new bootstrap.Modal(document.getElementById('quotaModal'));
+    deleteModal = new bootstrap.Modal(document.getElementById('quotaDeleteModal'));
+
+    document.getElementById('btn-add-quota').addEventListener('click', openAddModal);
+    document.getElementById('quota-form').addEventListener('submit', handleSave);
+    document.getElementById('confirm-delete-quota').addEventListener('click', handleConfirmDelete);
+
+    document.getElementById('quota-start').addEventListener('change', updateMonthRangeHint);
+    document.getElementById('quota-end').addEventListener('change', updateMonthRangeHint);
+
+    document.getElementById('quota-search').addEventListener('input', debounce(function (e) {
+      state.search = e.target.value;
+      state.page = 1;
+      fetchQuotas();
+    }, 350));
+
+    document.getElementById('quota-sort').addEventListener('change', function (e) {
+      var parts = e.target.value.split(':');
+      state.sortBy = parts[0];
+      state.sortDir = parts[1];
+      state.page = 1;
+      fetchQuotas();
+    });
+
+    document.getElementById('quota-page-size').addEventListener('change', function (e) {
+      state.pageSize = parseInt(e.target.value, 10);
+      state.page = 1;
+      fetchQuotas();
+    });
+
+    fetchQuotas();
+  }
+
+  function fetchQuotas() {
+    var grid = document.getElementById('quotas-grid');
+    grid.innerHTML = '<div class="text-center text-muted py-4" style="grid-column: 1 / -1;">Loading…</div>';
+
+    runServer('getQuotas', token(), state).then(function (res) {
+      if (!res.success) {
+        grid.innerHTML = '<div class="alert alert-danger" style="grid-column: 1 / -1;">' + res.message + '</div>';
+        return;
+      }
+      currentRecords = res.data.records;
+      renderCards(currentRecords);
+      renderSummary(res.data.pagination);
+      renderPagination('quotas-pagination', res.data.pagination, function (p) {
+        state.page = p;
+        fetchQuotas();
+      });
+    }).catch(function (err) {
+      grid.innerHTML = '<div class="alert alert-danger" style="grid-column: 1 / -1;">' + err.message + '</div>';
+    });
+  }
+
+  function renderCards(records) {
+    var grid = document.getElementById('quotas-grid');
+    if (!records.length) {
+      grid.innerHTML = '<div class="text-center text-muted py-4" style="grid-column: 1 / -1;">No reporting quotas found.</div>';
+      return;
+    }
+
+    grid.innerHTML = records.map(function (q) {
+      var badge = q.Status === 'Active' ? 'badge-active' : 'badge-inactive';
+      var labelAttr = escapeHtml(q.Quarter + ' ' + q.YearLabel).replace(/'/g, "\\'");
+
+      return (
+        '<div class="quota-admin-card">' +
+          '<div class="d-flex justify-content-between align-items-start">' +
+            '<div>' +
+              '<div class="quota-admin-card-quarter">' + escapeHtml(q.Quarter) + '</div>' +
+              '<div class="quota-admin-card-year">' + escapeHtml(q.YearLabel) + '</div>' +
+            '</div>' +
+            '<span class="badge ' + badge + '">' + q.Status + '</span>' +
+          '</div>' +
+          (q.DateRangeLabel ? '<div class="text-muted small mt-1"><i class="bi bi-calendar-range"></i> ' + escapeHtml(q.DateRangeLabel) + '</div>' : '') +
+          (q.ProjectYear ? '<div class="text-muted small"><i class="bi bi-flag"></i> Project Year ' + escapeHtml(q.ProjectYear) + '</div>' : '') +
+          '<div class="quota-admin-card-stat"><i class="bi bi-kanban"></i> <strong>' + q.ProjectCount + '</strong> project' + (q.ProjectCount === 1 ? '' : 's') + '</div>' +
+          '<div class="d-flex gap-2 mt-3">' +
+            '<button class="btn btn-sm btn-light flex-fill" onclick="editQuota(\'' + q.QuotaID + '\')" title="Edit"><i class="bi bi-pencil"></i> Edit</button>' +
+            '<button class="btn btn-sm btn-light text-danger flex-fill" onclick="promptDeleteQuota(\'' + q.QuotaID + '\', \'' + labelAttr + '\')" title="Delete"><i class="bi bi-trash"></i> Delete</button>' +
+          '</div>' +
+        '</div>'
+      );
+    }).join('');
+  }
+
+  function renderSummary(p) {
+    var el = document.getElementById('quotas-summary');
+    var start = (p.page - 1) * p.pageSize + 1;
+    var end = Math.min(p.page * p.pageSize, p.totalRecords);
+    el.textContent = p.totalRecords === 0 ? 'No records' : ('Showing ' + start + '–' + end + ' of ' + p.totalRecords);
+  }
+
+  function openAddModal() {
+    var form = document.getElementById('quota-form');
+    form.reset();
+    form.classList.remove('was-validated');
+    document.getElementById('quota-id').value = '';
+    document.getElementById('quotaModalLabel').textContent = 'Add Reporting Quota';
+    document.getElementById('quota-save-btn').textContent = 'Save Reporting Quota';
+    resetMonthRangeHint();
+    quotaModal.show();
+  }
+
+  window.editQuota = function (id) {
+    var record = currentRecords.find(function (q) { return q.QuotaID === id; });
+    if (!record) return;
+
+    document.getElementById('quota-id').value = record.QuotaID;
+    document.getElementById('quota-quarter').value = record.Quarter;
+    document.getElementById('quota-year').value = record.YearLabel;
+    document.getElementById('quota-projectyear').value = record.ProjectYear || '';
+    document.getElementById('quota-start').value = record.QuarterStart || '';
+    document.getElementById('quota-end').value = record.QuarterEnd || '';
+    document.getElementById('quota-status').value = record.Status;
+    document.getElementById('quotaModalLabel').textContent = 'Edit Reporting Quota';
+    document.getElementById('quota-save-btn').textContent = 'Save Changes';
+    document.getElementById('quota-form').classList.remove('was-validated');
+    updateMonthRangeHint();
+    quotaModal.show();
+  };
+
+  function resetMonthRangeHint() {
+    var hint = document.getElementById('quota-monthrange-hint');
+    hint.classList.remove('alert-success');
+    hint.querySelector('span').textContent = 'Set the start and end dates to see the range.';
+  }
+
+  /** Live preview of the currently-entered date range, before saving — computed client-side, no round trip needed since the dates are now direct input. */
+  function updateMonthRangeHint() {
+    var start = document.getElementById('quota-start').value;
+    var end = document.getElementById('quota-end').value;
+    var hint = document.getElementById('quota-monthrange-hint');
+    var span = hint.querySelector('span');
+
+    if (!start || !end) {
+      resetMonthRangeHint();
+      return;
+    }
+    if (end <= start) {
+      hint.classList.remove('alert-success');
+      span.textContent = 'End date must be after the start date.';
+      return;
+    }
+
+    hint.classList.add('alert-success');
+    span.textContent = 'Covers ' + formatDateDisplay(start) + ' – ' + formatDateDisplay(end) + '.';
+  }
+
+  function handleSave(e) {
+    e.preventDefault();
+
+    var form = document.getElementById('quota-form');
+    if (!form.checkValidity()) {
+      form.classList.add('was-validated');
+      return;
+    }
+
+    var id = document.getElementById('quota-id').value;
+    var data = {
+      Quarter: document.getElementById('quota-quarter').value,
+      YearLabel: document.getElementById('quota-year').value.trim(),
+      ProjectYear: document.getElementById('quota-projectyear').value.trim(),
+      QuarterStart: document.getElementById('quota-start').value,
+      QuarterEnd: document.getElementById('quota-end').value,
+      Status: document.getElementById('quota-status').value
+    };
+
+    var saveBtn = document.getElementById('quota-save-btn');
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving…';
+
+    var call = id ? runServer('updateQuota', token(), id, data) : runServer('addQuota', token(), data);
+
+    call.then(function (res) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = id ? 'Save Changes' : 'Save Reporting Quota';
+      if (!res.success) {
+        showToast(res.message, 'danger');
+        return;
+      }
+      quotaModal.hide();
+      showToast(id ? 'Reporting quota updated successfully.' : 'Reporting quota added successfully.', 'success');
+      fetchQuotas();
+    }).catch(function (err) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = id ? 'Save Changes' : 'Save Reporting Quota';
+      showToast(err.message, 'danger');
+    });
+  }
+
+  window.promptDeleteQuota = function (id, label) {
+    pendingDeleteId = id;
+    document.getElementById('delete-quota-name').textContent = label;
+    deleteModal.show();
+  };
+
+  function handleConfirmDelete() {
+    if (!pendingDeleteId) return;
+    runServer('deleteQuota', token(), pendingDeleteId).then(function (res) {
+      deleteModal.hide();
+      if (!res.success) {
+        showToast(res.message, 'danger');
+        return;
+      }
+      showToast('Reporting quota deleted.', 'success');
+      fetchQuotas();
+    }).catch(function (err) {
+      deleteModal.hide();
+      showToast(err.message, 'danger');
+    });
+  }
+})();
+</script>

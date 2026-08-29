@@ -1,0 +1,399 @@
+<script>
+(function () {
+  var activityModal, visitorTypeModal, ageBandModal, hubScheduleModal, trainingCourseModal, deleteModal;
+  var pendingDelete; // { kind, id, name }
+  var hubsById = {};
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'usageconfig') return;
+    initUsageConfigPage();
+  });
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  function initUsageConfigPage() {
+    activityModal = new bootstrap.Modal(document.getElementById('activityModal'));
+    visitorTypeModal = new bootstrap.Modal(document.getElementById('visitorTypeModal'));
+    ageBandModal = new bootstrap.Modal(document.getElementById('ageBandModal'));
+    hubScheduleModal = new bootstrap.Modal(document.getElementById('hubScheduleModal'));
+    trainingCourseModal = new bootstrap.Modal(document.getElementById('trainingCourseModal'));
+    deleteModal = new bootstrap.Modal(document.getElementById('usageConfigDeleteModal'));
+
+    document.querySelectorAll('.pill-tab').forEach(function (tab) {
+      tab.addEventListener('click', function () { switchTab(tab.dataset.tab); });
+    });
+
+    document.getElementById('btn-add-activity').addEventListener('click', openAddActivity);
+    document.getElementById('activity-form').addEventListener('submit', handleSaveActivity);
+
+    document.getElementById('btn-add-visitortype').addEventListener('click', openAddVisitorType);
+    document.getElementById('visitortype-form').addEventListener('submit', handleSaveVisitorType);
+
+    document.getElementById('btn-add-ageband').addEventListener('click', openAddAgeBand);
+    document.getElementById('ageband-form').addEventListener('submit', handleSaveAgeBand);
+
+    document.getElementById('hubschedule-form').addEventListener('submit', handleSaveHubSchedule);
+    document.getElementById('btn-add-trainingcourse').addEventListener('click', openAddTrainingCourse);
+    document.getElementById('trainingcourse-form').addEventListener('submit', handleSaveTrainingCourse);
+    document.getElementById('confirm-delete-usageconfig').addEventListener('click', handleConfirmDelete);
+
+    fetchActivities();
+  }
+
+  function switchTab(tabKey) {
+    document.querySelectorAll('.pill-tab').forEach(function (t) { t.classList.toggle('active', t.dataset.tab === tabKey); });
+    document.querySelectorAll('.usage-config-pane').forEach(function (p) { p.classList.add('d-none'); });
+    document.getElementById('pane-' + tabKey).classList.remove('d-none');
+    if (tabKey === 'activities') fetchActivities();
+    if (tabKey === 'visitortypes') fetchVisitorTypes();
+    if (tabKey === 'agebands') fetchAgeBands();
+    if (tabKey === 'hubschedule') fetchHubSchedules();
+    if (tabKey === 'trainingcourses') fetchTrainingCourses();
+  }
+
+  // ---------- Training Courses ----------
+  function fetchTrainingCourses() {
+    runServer('getTrainingCourses', token(), { page: 1, pageSize: 1000 }).then(function (res) {
+      var tbody = document.getElementById('trainingcourses-table-body');
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="4" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      var records = res.data.records;
+      if (!records.length) { tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-4">No training courses yet.</td></tr>'; return; }
+      tbody.innerHTML = records.map(function (c) {
+        var badge = c.Active === true || c.Active === 'true' ? 'badge-active' : 'badge-inactive';
+        return '<tr>' +
+          '<td class="fw-medium">' + escapeHtml(c.Name) + '</td>' +
+          '<td>' + escapeHtml(c.Category || '') + '</td>' +
+          '<td><span class="badge ' + badge + '">' + (c.Active === true || c.Active === 'true' ? 'Active' : 'Inactive') + '</span></td>' +
+          '<td class="text-end">' +
+            '<button class="btn btn-sm btn-light me-1" onclick="UsageConfig.editTrainingCourse(\'' + c.CourseID + '\')" title="Edit"><i class="bi bi-pencil"></i></button>' +
+            '<button class="btn btn-sm btn-light text-danger" onclick="UsageConfig.promptDelete(\'trainingcourse\', \'' + c.CourseID + '\', \'' + escapeHtml(c.Name).replace(/'/g, "\\'") + '\')" title="Delete"><i class="bi bi-trash"></i></button>' +
+          '</td>' +
+        '</tr>';
+      }).join('');
+    });
+  }
+
+  function openAddTrainingCourse() {
+    document.getElementById('trainingcourse-form').reset();
+    document.getElementById('trainingcourse-id').value = '';
+    document.getElementById('trainingcourse-active').checked = true;
+    document.getElementById('trainingCourseModalLabel').textContent = 'Add Training Course';
+    trainingCourseModal.show();
+  }
+
+  function handleSaveTrainingCourse(e) {
+    e.preventDefault();
+    var id = document.getElementById('trainingcourse-id').value;
+    var data = {
+      Name: document.getElementById('trainingcourse-name').value.trim(),
+      Category: document.getElementById('trainingcourse-category').value.trim(),
+      Active: document.getElementById('trainingcourse-active').checked
+    };
+    var call = id ? runServer('updateTrainingCourse', token(), id, data) : runServer('addTrainingCourse', token(), data);
+    call.then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      trainingCourseModal.hide();
+      showToast('Training course saved.', 'success');
+      fetchTrainingCourses();
+    });
+  }
+
+  // ---------- Activities ----------
+  function fetchActivities() {
+    runServer('getActivities', token(), { page: 1, pageSize: 1000 }).then(function (res) {
+      var tbody = document.getElementById('activities-table-body');
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="4" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      var records = res.data.records;
+      if (!records.length) { tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-4">No activities yet.</td></tr>'; return; }
+      tbody.innerHTML = records.map(function (a) {
+        var badge = a.Active === true || a.Active === 'true' ? 'badge-active' : 'badge-inactive';
+        return '<tr>' +
+          '<td class="fw-medium">' + escapeHtml(a.Name) + '</td>' +
+          '<td>' + escapeHtml(a.Category || '') + '</td>' +
+          '<td><span class="badge ' + badge + '">' + (a.Active === true || a.Active === 'true' ? 'Active' : 'Inactive') + '</span></td>' +
+          '<td class="text-end">' +
+            '<button class="btn btn-sm btn-light me-1" onclick="UsageConfig.editActivity(\'' + a.ActivityID + '\')" title="Edit"><i class="bi bi-pencil"></i></button>' +
+            '<button class="btn btn-sm btn-light text-danger" onclick="UsageConfig.promptDelete(\'activity\', \'' + a.ActivityID + '\', \'' + escapeHtml(a.Name).replace(/'/g, "\\'") + '\')" title="Delete"><i class="bi bi-trash"></i></button>' +
+          '</td>' +
+        '</tr>';
+      }).join('');
+    });
+  }
+
+  function openAddActivity() {
+    document.getElementById('activity-form').reset();
+    document.getElementById('activity-id').value = '';
+    document.getElementById('activity-active').checked = true;
+    document.getElementById('activityModalLabel').textContent = 'Add Activity';
+    activityModal.show();
+  }
+
+  function handleSaveActivity(e) {
+    e.preventDefault();
+    var id = document.getElementById('activity-id').value;
+    var data = {
+      Name: document.getElementById('activity-name').value.trim(),
+      Category: document.getElementById('activity-category').value.trim(),
+      Active: document.getElementById('activity-active').checked
+    };
+    var call = id ? runServer('updateActivity', token(), id, data) : runServer('addActivity', token(), data);
+    call.then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      activityModal.hide();
+      showToast('Activity saved.', 'success');
+      fetchActivities();
+    });
+  }
+
+  // ---------- Visitor Types ----------
+  function fetchVisitorTypes() {
+    runServer('getVisitorTypes', token(), { page: 1, pageSize: 1000 }).then(function (res) {
+      var tbody = document.getElementById('visitortypes-table-body');
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="3" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      var records = res.data.records;
+      if (!records.length) { tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted py-4">No visitor types yet.</td></tr>'; return; }
+      tbody.innerHTML = records.map(function (v) {
+        var badge = v.Active === true || v.Active === 'true' ? 'badge-active' : 'badge-inactive';
+        return '<tr>' +
+          '<td class="fw-medium">' + escapeHtml(v.Name) + '</td>' +
+          '<td><span class="badge ' + badge + '">' + (v.Active === true || v.Active === 'true' ? 'Active' : 'Inactive') + '</span></td>' +
+          '<td class="text-end">' +
+            '<button class="btn btn-sm btn-light me-1" onclick="UsageConfig.editVisitorType(\'' + v.VisitorTypeID + '\')" title="Edit"><i class="bi bi-pencil"></i></button>' +
+            '<button class="btn btn-sm btn-light text-danger" onclick="UsageConfig.promptDelete(\'visitortype\', \'' + v.VisitorTypeID + '\', \'' + escapeHtml(v.Name).replace(/'/g, "\\'") + '\')" title="Delete"><i class="bi bi-trash"></i></button>' +
+          '</td>' +
+        '</tr>';
+      }).join('');
+    });
+  }
+
+  function openAddVisitorType() {
+    document.getElementById('visitortype-form').reset();
+    document.getElementById('visitortype-id').value = '';
+    document.getElementById('visitortype-active').checked = true;
+    document.getElementById('visitorTypeModalLabel').textContent = 'Add Visitor Type';
+    visitorTypeModal.show();
+  }
+
+  function handleSaveVisitorType(e) {
+    e.preventDefault();
+    var id = document.getElementById('visitortype-id').value;
+    var data = {
+      Name: document.getElementById('visitortype-name').value.trim(),
+      Active: document.getElementById('visitortype-active').checked
+    };
+    var call = id ? runServer('updateVisitorType', token(), id, data) : runServer('addVisitorType', token(), data);
+    call.then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      visitorTypeModal.hide();
+      showToast('Visitor type saved.', 'success');
+      fetchVisitorTypes();
+    });
+  }
+
+  // ---------- Age Bands ----------
+  function fetchAgeBands() {
+    runServer('getAgeBands', token(), { page: 1, pageSize: 1000 }).then(function (res) {
+      var tbody = document.getElementById('agebands-table-body');
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="6" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      var records = res.data.records;
+      if (!records.length) { tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">No age bands yet.</td></tr>'; return; }
+      tbody.innerHTML = records.map(function (a) {
+        var badge = a.Active === true || a.Active === 'true' ? 'badge-active' : 'badge-inactive';
+        var isYouth = a.IsYouth === true || a.IsYouth === 'true';
+        return '<tr>' +
+          '<td class="fw-medium">' + escapeHtml(a.Label) + '</td>' +
+          '<td>' + a.MinAge + '</td>' +
+          '<td>' + (a.MaxAge === '' || a.MaxAge === undefined || a.MaxAge === null ? '&mdash;' : a.MaxAge) + '</td>' +
+          '<td>' + (isYouth ? '<i class="bi bi-check-lg text-success"></i>' : '') + '</td>' +
+          '<td><span class="badge ' + badge + '">' + (a.Active === true || a.Active === 'true' ? 'Active' : 'Inactive') + '</span></td>' +
+          '<td class="text-end">' +
+            '<button class="btn btn-sm btn-light me-1" onclick="UsageConfig.editAgeBand(\'' + a.AgeBandID + '\')" title="Edit"><i class="bi bi-pencil"></i></button>' +
+            '<button class="btn btn-sm btn-light text-danger" onclick="UsageConfig.promptDelete(\'ageband\', \'' + a.AgeBandID + '\', \'' + escapeHtml(a.Label).replace(/'/g, "\\'") + '\')" title="Delete"><i class="bi bi-trash"></i></button>' +
+          '</td>' +
+        '</tr>';
+      }).join('');
+    });
+  }
+
+  function openAddAgeBand() {
+    document.getElementById('ageband-form').reset();
+    document.getElementById('ageband-id').value = '';
+    document.getElementById('ageband-active').checked = true;
+    document.getElementById('ageBandModalLabel').textContent = 'Add Age Band';
+    ageBandModal.show();
+  }
+
+  function handleSaveAgeBand(e) {
+    e.preventDefault();
+    var id = document.getElementById('ageband-id').value;
+    var maxVal = document.getElementById('ageband-max').value;
+    var data = {
+      Label: document.getElementById('ageband-label').value.trim(),
+      MinAge: document.getElementById('ageband-min').value,
+      MaxAge: maxVal === '' ? '' : maxVal,
+      IsYouth: document.getElementById('ageband-youth').checked,
+      Active: document.getElementById('ageband-active').checked
+    };
+    var call = id ? runServer('updateAgeBand', token(), id, data) : runServer('addAgeBand', token(), data);
+    call.then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      ageBandModal.hide();
+      showToast('Age band saved.', 'success');
+      fetchAgeBands();
+    });
+  }
+
+  // ---------- Hub Schedule ----------
+  function fetchHubSchedules() {
+    var tbody = document.getElementById('hubschedule-table-body');
+    Promise.all([runServer('getHubOptions', token()), runServer('getHubSchedules', token())]).then(function (results) {
+      var hubsRes = results[0], schedulesRes = results[1];
+      if (!hubsRes.success) { tbody.innerHTML = '<tr><td colspan="4" class="text-danger text-center py-4">' + hubsRes.message + '</td></tr>'; return; }
+      if (!schedulesRes.success) { tbody.innerHTML = '<tr><td colspan="4" class="text-danger text-center py-4">' + schedulesRes.message + '</td></tr>'; return; }
+
+      hubsById = {};
+      hubsRes.data.forEach(function (h) { hubsById[h.id] = h.name; });
+
+      var scheduleByHub = {};
+      schedulesRes.data.forEach(function (s) { scheduleByHub[s.HubID] = s; });
+
+      var dayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+      tbody.innerHTML = hubsRes.data.map(function (h) {
+        var s = scheduleByHub[h.id];
+        var daysText = s ? s.OpenDays.split(',').map(function (d) { return dayLabels[Number(d)]; }).join(', ') : '<span class="text-muted">Not configured</span>';
+        var hoursText = s ? (s.OpenTime + '–' + s.CloseTime) : '';
+        return '<tr>' +
+          '<td class="fw-medium">' + escapeHtml(h.name) + '</td>' +
+          '<td>' + daysText + '</td>' +
+          '<td>' + hoursText + '</td>' +
+          '<td class="text-end">' +
+            '<button class="btn btn-sm btn-light" onclick="UsageConfig.editHubSchedule(\'' + h.id + '\')" title="Set hours"><i class="bi bi-pencil"></i></button>' +
+          '</td>' +
+        '</tr>';
+      }).join('');
+    });
+  }
+
+  function handleSaveHubSchedule(e) {
+    e.preventDefault();
+    var openInput = document.getElementById('hubschedule-open');
+    var closeInput = document.getElementById('hubschedule-close');
+    var timePattern = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
+    if (!timePattern.test(openInput.value.trim()) || !timePattern.test(closeInput.value.trim())) {
+      showToast('Enter times in 24-hour HH:mm format, e.g. 09:00 or 16:00.', 'danger');
+      return;
+    }
+    var hubId = document.getElementById('hubschedule-hubid').value;
+    var days = [];
+    document.querySelectorAll('#hubschedule-days input:checked').forEach(function (cb) { days.push(cb.value); });
+    var data = {
+      OpenDays: days,
+      OpenTime: openInput.value.trim(),
+      CloseTime: closeInput.value.trim()
+    };
+    runServer('setHubSchedule', token(), hubId, data).then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      hubScheduleModal.hide();
+      showToast('Hub schedule saved.', 'success');
+      fetchHubSchedules();
+    });
+  }
+
+  // ---------- Delete (shared) ----------
+  function handleConfirmDelete() {
+    if (!pendingDelete) return;
+    var fnByKind = { activity: 'deleteActivity', visitortype: 'deleteVisitorType', ageband: 'deleteAgeBand', trainingcourse: 'deleteTrainingCourse' };
+    runServer(fnByKind[pendingDelete.kind], token(), pendingDelete.id).then(function (res) {
+      deleteModal.hide();
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Deleted.', 'success');
+      if (pendingDelete.kind === 'activity') fetchActivities();
+      if (pendingDelete.kind === 'visitortype') fetchVisitorTypes();
+      if (pendingDelete.kind === 'ageband') fetchAgeBands();
+      if (pendingDelete.kind === 'trainingcourse') fetchTrainingCourses();
+    });
+  }
+
+  // ---------- Exposed to inline onclick handlers ----------
+  window.UsageConfig = {
+    editActivity: function (id) {
+      runServer('getActivities', token(), { page: 1, pageSize: 1000 }).then(function (res) {
+        if (!res.success) return;
+        var a = res.data.records.find(function (r) { return r.ActivityID === id; });
+        if (!a) return;
+        document.getElementById('activity-id').value = a.ActivityID;
+        document.getElementById('activity-name').value = a.Name;
+        document.getElementById('activity-category').value = a.Category || '';
+        document.getElementById('activity-active').checked = a.Active === true || a.Active === 'true';
+        document.getElementById('activityModalLabel').textContent = 'Edit Activity';
+        activityModal.show();
+      });
+    },
+    editVisitorType: function (id) {
+      runServer('getVisitorTypes', token(), { page: 1, pageSize: 1000 }).then(function (res) {
+        if (!res.success) return;
+        var v = res.data.records.find(function (r) { return r.VisitorTypeID === id; });
+        if (!v) return;
+        document.getElementById('visitortype-id').value = v.VisitorTypeID;
+        document.getElementById('visitortype-name').value = v.Name;
+        document.getElementById('visitortype-active').checked = v.Active === true || v.Active === 'true';
+        document.getElementById('visitorTypeModalLabel').textContent = 'Edit Visitor Type';
+        visitorTypeModal.show();
+      });
+    },
+    editAgeBand: function (id) {
+      runServer('getAgeBands', token(), { page: 1, pageSize: 1000 }).then(function (res) {
+        if (!res.success) return;
+        var a = res.data.records.find(function (r) { return r.AgeBandID === id; });
+        if (!a) return;
+        document.getElementById('ageband-id').value = a.AgeBandID;
+        document.getElementById('ageband-label').value = a.Label;
+        document.getElementById('ageband-min').value = a.MinAge;
+        document.getElementById('ageband-max').value = (a.MaxAge === '' || a.MaxAge === undefined) ? '' : a.MaxAge;
+        document.getElementById('ageband-youth').checked = a.IsYouth === true || a.IsYouth === 'true';
+        document.getElementById('ageband-active').checked = a.Active === true || a.Active === 'true';
+        document.getElementById('ageBandModalLabel').textContent = 'Edit Age Band';
+        ageBandModal.show();
+      });
+    },
+    editHubSchedule: function (hubId) {
+      runServer('getHubSchedules', token()).then(function (res) {
+        if (!res.success) { showToast(res.message, 'danger'); return; }
+        var existing = res.data.find(function (s) { return s.HubID === hubId; });
+        document.getElementById('hubschedule-form').reset();
+        document.getElementById('hubschedule-hubid').value = hubId;
+        document.getElementById('hubschedule-hubname').value = hubsById[hubId] || hubId;
+        document.querySelectorAll('#hubschedule-days input').forEach(function (cb) { cb.checked = false; });
+        if (existing) {
+          existing.OpenDays.split(',').forEach(function (d) {
+            var cb = document.getElementById('day-' + d);
+            if (cb) cb.checked = true;
+          });
+          document.getElementById('hubschedule-open').value = existing.OpenTime;
+          document.getElementById('hubschedule-close').value = existing.CloseTime;
+        }
+        hubScheduleModal.show();
+      });
+    },
+    editTrainingCourse: function (id) {
+      runServer('getTrainingCourses', token(), { page: 1, pageSize: 1000 }).then(function (res) {
+        if (!res.success) return;
+        var c = res.data.records.find(function (r) { return r.CourseID === id; });
+        if (!c) return;
+        document.getElementById('trainingcourse-id').value = c.CourseID;
+        document.getElementById('trainingcourse-name').value = c.Name;
+        document.getElementById('trainingcourse-category').value = c.Category || '';
+        document.getElementById('trainingcourse-active').checked = c.Active === true || c.Active === 'true';
+        document.getElementById('trainingCourseModalLabel').textContent = 'Edit Training Course';
+        trainingCourseModal.show();
+      });
+    },
+    promptDelete: function (kind, id, name) {
+      pendingDelete = { kind: kind, id: id, name: name };
+      document.getElementById('delete-usageconfig-name').textContent = name;
+      deleteModal.show();
+    }
+  };
+})();
+</script>

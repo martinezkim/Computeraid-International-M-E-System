@@ -1,0 +1,120 @@
+<div class="page-header">
+  <div>
+    <h4>Invoices</h4>
+    <p>Every invoice raised against a hub or the organization — approve, reject, return, or mark paid</p>
+  </div>
+</div>
+
+<div class="pill-tabs animate-float-up">
+  <button type="button" class="pill-tab active" data-tab="pending">Awaiting Approval</button>
+  <button type="button" class="pill-tab" data-tab="all">All Invoices</button>
+</div>
+
+<!-- Awaiting Approval -->
+<div class="card-surface usage-config-pane" id="pane-pending">
+  <div class="toolbar mb-3">
+    <select class="form-select w-auto" id="pending-hub-filter"><option value="">All Hubs</option></select>
+  </div>
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Invoice #</th><th>Supplier</th><th>Hub</th><th>Category</th><th class="text-end">Amount</th><th>Submitted</th><th>By</th><th>Status</th></tr></thead>
+      <tbody id="pending-invoices-table-body"><tr><td colspan="8" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+  <div class="d-flex justify-content-between align-items-center mt-2">
+    <small class="text-muted" id="pending-invoices-summary"></small>
+    <div id="pending-invoices-pagination"></div>
+  </div>
+</div>
+
+<!-- All Invoices -->
+<div class="card-surface usage-config-pane d-none" id="pane-all">
+  <div class="toolbar mb-3">
+    <div class="search-box">
+      <i class="bi bi-search"></i>
+      <input type="text" class="form-control" id="all-invoices-search" placeholder="Search supplier, invoice #…">
+    </div>
+    <select class="form-select w-auto" id="all-hub-filter"><option value="">All Hubs</option></select>
+    <select class="form-select w-auto" id="all-status-filter">
+      <option value="">All Statuses</option>
+      <option value="Submitted">Submitted</option>
+      <option value="Under Review">Under Review</option>
+      <option value="Approved">Approved</option>
+      <option value="Rejected">Rejected</option>
+      <option value="Returned">Returned</option>
+      <option value="Cancelled">Cancelled</option>
+    </select>
+  </div>
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Invoice #</th><th>Supplier</th><th>Hub</th><th>Category</th><th class="text-end">Amount</th><th>Submitted</th><th>By</th><th>Status</th><th>Payment</th></tr></thead>
+      <tbody id="all-invoices-table-body"><tr><td colspan="9" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+  <div class="d-flex justify-content-between align-items-center mt-2">
+    <small class="text-muted" id="all-invoices-summary"></small>
+    <div id="all-invoices-pagination"></div>
+  </div>
+</div>
+
+<!-- Invoice Detail Modal -->
+<div class="modal fade" id="invoiceDetailModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Invoice Details</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="invoice-detail-reason-banner"></div>
+        <div id="invoice-detail-fields" class="bendetail-grid"></div>
+      </div>
+      <div class="modal-footer flex-wrap gap-2" id="invoice-detail-actions"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Reason Modal (Reject / Return / Cancel — shared) -->
+<div class="modal fade" id="invoiceReasonModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="invoiceReasonModalLabel">Reason</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <textarea class="form-control" id="invoice-reason-text" maxlength="500" rows="3" placeholder="Explain why…"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-danger" id="confirm-invoice-reason">Confirm</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Mark Paid Modal -->
+<div class="modal fade" id="invoicePaidModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Mark Invoice Paid</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label">Payment Date</label>
+          <input type="date" class="form-control" id="invoice-payment-date">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Payment Reference <span class="text-muted">(optional)</span></label>
+          <input type="text" class="form-control" id="invoice-payment-reference" maxlength="80">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="confirm-invoice-paid">Mark Paid</button>
+      </div>
+    </div>
+  </div>
+</div>

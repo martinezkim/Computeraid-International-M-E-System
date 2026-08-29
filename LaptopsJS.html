@@ -1,0 +1,750 @@
+<script>
+(function () {
+  var STATUS_BADGE = {
+    'Current Stock': 'badge-laptop-stock',
+    'Sold': 'badge-laptop-sold',
+    'Faulty': 'badge-laptop-faulty'
+  };
+
+  // Canonical field <- normalized (lowercased, non-alphanumeric stripped) header aliases.
+  // Matches the recommended import columns (purchaseordernum, salesordernum, Barcode,
+  // customerid, stockid, categoryname, ManName, modelname, "Blancco Processor", RAM,
+  // HDD, "CD?", MEMORYTOTAL, MEMORYBANKS, SerialNumber, collectionid) plus common
+  // plain-English variants, so a differently-formatted export still maps correctly.
+  var IMPORT_COLUMN_ALIASES = {
+    assetid: ['barcode', 'assetid', 'asset', 'stockid'],
+    manufacturer: ['manname', 'manufacturer', 'make'],
+    model: ['modelname', 'model'],
+    serialNumber: ['serialnumber', 'serial', 'sn'],
+    processor: ['blanccoprocessor', 'processor', 'cpu'],
+    ram: ['ram', 'memorytotal'],
+    storage: ['hdd', 'storage', 'ssd', 'disk'],
+    purchaseOrderNumber: ['purchaseordernum', 'purchaseordernumber', 'ponumber'],
+    salesOrderNumber: ['salesordernum', 'salesordernumber', 'sonumber'],
+    collectionId: ['collectionid'],
+    memoryBanks: ['memorybanks'],
+    cdDrive: ['cd'],
+    customerId: ['customerid'],
+    categoryName: ['categoryname']
+  };
+
+  var laptopModal, laptopDeleteModal, importModal;
+  var pendingDeleteId;
+  var state = {
+    status: 'Current Stock', search: '', sortBy: 'DateAdded', sortDir: 'desc', page: 1, pageSize: 10,
+    manufacturer: '', processor: '', ram: '', storage: '', priceMin: '', priceMax: '', dateFrom: '', dateTo: '',
+    grouped: true, viewMode: 'grid'
+  };
+  var currentRecords = [];
+  var currentGroups = [];
+  var expandedGroups = {};
+  var parsedImportRows = [];
+  var importPreviewResult = null;
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'laptopsale') return;
+    if (!window.MNE_CURRENT_USER || window.MNE_CURRENT_USER.role !== 'HubManager') return;
+    initLaptopsPage();
+  });
+
+  function initLaptopsPage() {
+    state = {
+      status: 'Current Stock', search: '', sortBy: 'DateAdded', sortDir: 'desc', page: 1, pageSize: 10,
+      manufacturer: '', processor: '', ram: '', storage: '', priceMin: '', priceMax: '', dateFrom: '', dateTo: '',
+      grouped: true, viewMode: 'grid'
+    };
+    expandedGroups = {};
+
+    laptopModal = new bootstrap.Modal(document.getElementById('laptopModal'));
+    laptopDeleteModal = new bootstrap.Modal(document.getElementById('laptopDeleteModal'));
+    importModal = new bootstrap.Modal(document.getElementById('laptopImportModal'));
+
+    var hubLabel = document.getElementById('laptops-hub-label');
+    runServer('getHubById', localStorage.getItem(MNE_SESSION_KEY), window.MNE_CURRENT_USER.hubId).then(function (res) {
+      hubLabel.textContent = res.success ? ('Hub: ' + res.data.name) : 'Your hub';
+    }).catch(function () { hubLabel.textContent = 'Your hub'; });
+
+    document.querySelectorAll('.pill-tab').forEach(function (tab) {
+      tab.addEventListener('click', function () {
+        document.querySelectorAll('.pill-tab').forEach(function (t) { t.classList.remove('active'); });
+        tab.classList.add('active');
+        state.status = tab.getAttribute('data-status');
+        state.page = 1;
+        fetchLaptops();
+      });
+    });
+
+    document.getElementById('btn-add-laptop').addEventListener('click', openAddLaptopModal);
+    document.getElementById('laptop-form').addEventListener('submit', handleSaveLaptop);
+    document.getElementById('confirm-delete-laptop').addEventListener('click', handleConfirmDeleteLaptop);
+    document.getElementById('laptop-status').addEventListener('change', function (e) {
+      toggleSoldFields(e.target.value === 'Sold');
+    });
+
+    document.getElementById('laptop-search').addEventListener('input', debounce(function (e) {
+      state.search = e.target.value; state.page = 1; fetchLaptops();
+    }, 350));
+    ['manufacturer', 'processor', 'ram', 'storage'].forEach(function (f) {
+      document.getElementById('laptop-' + f + '-filter').addEventListener('change', function (e) {
+        state[f] = e.target.value; state.page = 1; fetchLaptops();
+      });
+    });
+    document.getElementById('laptop-sort').addEventListener('change', function (e) {
+      var parts = e.target.value.split(':');
+      state.sortBy = parts[0]; state.sortDir = parts[1]; state.page = 1; fetchLaptops();
+    });
+    document.getElementById('laptop-price-min').addEventListener('input', debounce(function (e) {
+      state.priceMin = e.target.value; state.page = 1; fetchLaptops();
+    }, 350));
+    document.getElementById('laptop-price-max').addEventListener('input', debounce(function (e) {
+      state.priceMax = e.target.value; state.page = 1; fetchLaptops();
+    }, 350));
+    document.getElementById('laptop-date-from').addEventListener('change', function (e) {
+      state.dateFrom = e.target.value; state.page = 1; fetchLaptops();
+    });
+    document.getElementById('laptop-date-to').addEventListener('change', function (e) {
+      state.dateTo = e.target.value; state.page = 1; fetchLaptops();
+    });
+    document.getElementById('laptop-page-size').addEventListener('change', function (e) {
+      state.pageSize = parseInt(e.target.value, 10); state.page = 1; fetchLaptops();
+    });
+
+    document.getElementById('laptop-group-toggle').addEventListener('change', function (e) {
+      state.grouped = e.target.checked;
+      state.page = 1;
+      expandedGroups = {};
+      fetchLaptops();
+    });
+    document.getElementById('laptop-view-grid').addEventListener('click', function () { setViewMode('grid'); });
+    document.getElementById('laptop-view-list').addEventListener('click', function () { setViewMode('list'); });
+
+    initImportUI();
+
+    loadLaptopFormOptions().then(function () {
+      return loadLaptopFilterValues();
+    }).then(function () {
+      fetchLaptops();
+      refreshTabCounts();
+    });
+  }
+
+  function loadLaptopFormOptions() {
+    return runServer('getLaptopFormOptions', token()).then(function (res) {
+      var opts = res.success ? res.data : { conditions: [], statuses: [] };
+      populateSelect('laptop-condition', opts.conditions, 'Select condition…');
+      populateSelect('laptop-status', opts.statuses, 'Select status…');
+    });
+  }
+
+  function loadLaptopFilterValues() {
+    var token = localStorage.getItem(MNE_SESSION_KEY);
+    return runServer('getMyLaptopFilterValues', token).then(function (res) {
+      if (!res.success) return;
+      fillFilterSelect('laptop-manufacturer-filter', res.data.manufacturers, 'All Manufacturers');
+      fillFilterSelect('laptop-processor-filter', res.data.processors, 'All Processors');
+      fillFilterSelect('laptop-ram-filter', res.data.rams, 'All RAM');
+      fillFilterSelect('laptop-storage-filter', res.data.storages, 'All Storage');
+    });
+  }
+
+  function fillFilterSelect(elementId, values, placeholder) {
+    var select = document.getElementById(elementId);
+    select.innerHTML = '<option value="">' + placeholder + '</option>' +
+      values.map(function (v) { return '<option value="' + escapeHtml(v) + '">' + escapeHtml(v) + '</option>'; }).join('');
+  }
+
+  function populateSelect(elementId, options, placeholder) {
+    var select = document.getElementById(elementId);
+    select.innerHTML = '<option value="">' + placeholder + '</option>' +
+      options.map(function (o) { return '<option value="' + escapeHtml(o) + '">' + escapeHtml(o) + '</option>'; }).join('');
+  }
+
+  function refreshTabCounts() {
+    var token = localStorage.getItem(MNE_SESSION_KEY);
+    runServer('getMyLaptopsSummary', token).then(function (res) {
+      if (!res.success) return;
+      document.querySelector('.pill-tab[data-status="Current Stock"]').textContent = 'Current Stock (' + res.data.currentStock + ')';
+      document.querySelector('.pill-tab[data-status="Sold"]').textContent = 'Sold Laptops (' + res.data.sold + ')';
+      document.querySelector('.pill-tab[data-status="Faulty"]').textContent = 'Faulty Laptops (' + res.data.faulty + ')';
+    });
+  }
+
+  function setViewMode(mode) {
+    state.viewMode = mode;
+    document.getElementById('laptop-view-grid').classList.toggle('active', mode === 'grid');
+    document.getElementById('laptop-view-list').classList.toggle('active', mode === 'list');
+    var grid = document.getElementById('laptop-grid');
+    grid.classList.toggle('project-grid', mode === 'grid');
+    grid.classList.toggle('inventory-list-view', mode === 'list');
+    if (state.grouped) renderGroupCards(currentGroups); else renderLaptopCards(currentRecords);
+  }
+
+  function fetchLaptops() {
+    var grid = document.getElementById('laptop-grid');
+    grid.innerHTML = '<div class="text-center text-muted py-4" style="grid-column: 1 / -1;">Loading...</div>';
+
+    var token = localStorage.getItem(MNE_SESSION_KEY);
+    var fn = state.grouped ? 'getMyLaptopsGrouped' : 'getMyLaptops';
+
+    runServer(fn, token, state).then(function (res) {
+      if (!res.success) {
+        grid.innerHTML = '<div class="alert alert-danger" style="grid-column: 1 / -1;">' + res.message + '</div>';
+        return;
+      }
+      if (state.grouped) {
+        currentGroups = res.data.records;
+        currentRecords = [].concat.apply([], currentGroups.map(function (g) { return g.units; }));
+        renderGroupCards(currentGroups);
+      } else {
+        currentRecords = res.data.records;
+        renderLaptopCards(currentRecords);
+      }
+      renderLaptopListSummary(res.data.pagination);
+      renderPagination('laptop-pagination', res.data.pagination, function (p) { state.page = p; fetchLaptops(); });
+    }).catch(function (err) {
+      grid.innerHTML = '<div class="alert alert-danger" style="grid-column: 1 / -1;">' + err.message + '</div>';
+    });
+  }
+
+  function laptopRowHtml(l) {
+    var statusBadge = STATUS_BADGE[l.Status] || 'badge-inactive';
+    var nameAttr = escapeHtml((l.Manufacturer + ' ' + l.Model) || '').replace(/'/g, "\\'");
+    return (
+      '<tr>' +
+        '<td>' + escapeHtml(l.Manufacturer + ' ' + l.Model) + '<div class="text-muted small">' + escapeHtml(l.AssetID || l.InventoryID) + '</div></td>' +
+        '<td>' + escapeHtml(l.SerialNumber || '\u2014') + '</td>' +
+        '<td>' + [l.Processor, l.RAM, l.Storage].filter(Boolean).map(escapeHtml).join(' \u00b7 ') + '</td>' +
+        '<td>' + formatCurrency(l.Status === 'Sold' ? l.SalePrice : l.SellingPrice) + '</td>' +
+        '<td><span class="badge ' + statusBadge + '">' + escapeHtml(l.Status) + '</span></td>' +
+        '<td>' + escapeHtml(formatDateDisplay(l.DateAdded)) + '</td>' +
+        '<td class="text-end">' +
+          '<button type="button" class="btn btn-sm btn-light" onclick="editLaptopRecord(\'' + l.InventoryID + '\')" title="Edit"><i class="bi bi-pencil"></i></button> ' +
+          '<button type="button" class="btn btn-sm btn-light text-danger" onclick="promptDeleteLaptop(\'' + l.InventoryID + '\', \'' + nameAttr + '\')" title="Delete"><i class="bi bi-trash"></i></button>' +
+        '</td>' +
+      '</tr>'
+    );
+  }
+
+  function laptopListTableHtml(records) {
+    return (
+      '<div style="grid-column:1/-1;" class="table-responsive"><table class="table table-sm align-middle">' +
+        '<thead><tr><th>Model</th><th>Serial</th><th>Specs</th><th>Price</th><th>Status</th><th>Added</th><th></th></tr></thead>' +
+        '<tbody>' + records.map(laptopRowHtml).join('') + '</tbody>' +
+      '</table></div>'
+    );
+  }
+
+  function laptopCardHtml(l) {
+    var statusBadge = STATUS_BADGE[l.Status] || 'badge-inactive';
+    var nameAttr = escapeHtml((l.Manufacturer + ' ' + l.Model) || '').replace(/'/g, "\\'");
+    var specsLine = [l.Processor, l.RAM, l.Storage].filter(Boolean).map(escapeHtml).join(' \u00b7 ');
+    var saleLine = l.Status === 'Sold'
+      ? '<div class="inventory-card-meta"><i class="bi bi-person-check"></i> ' + escapeHtml(l.BuyerName || '\u2014') + ' \u00b7 ' + formatCurrency(l.SalePrice) + '</div>'
+      : '';
+
+    return (
+        '<div class="inventory-card">' +
+          '<div class="inventory-card-top">' +
+            '<span class="inventory-card-category"><i class="bi bi-upc-scan"></i> ' + escapeHtml(l.AssetID || l.InventoryID) + '</span>' +
+            '<span class="inventory-card-qty">' + formatCurrency(l.SellingPrice) + '</span>' +
+          '</div>' +
+          '<div class="inventory-card-name">' + escapeHtml(l.Manufacturer + ' ' + l.Model) + '</div>' +
+          (specsLine ? '<div class="inventory-card-meta">' + specsLine + '</div>' : '') +
+          '<div class="inventory-card-serial">S/N ' + escapeHtml(l.SerialNumber || '\u2014') + '</div>' +
+          '<div class="inventory-card-badges">' +
+            '<span class="badge badge-condition-' + (l.Condition === 'New' ? 'new' : 'refurbished') + '">' + escapeHtml(l.Condition) + '</span>' +
+            '<span class="badge ' + statusBadge + '">' + escapeHtml(l.Status) + '</span>' +
+            (l.OrderNumber ? '<span class="badge bg-light text-dark">' + escapeHtml(l.OrderNumber) + '</span>' : '') +
+          '</div>' +
+          saleLine +
+          '<div class="inventory-card-date"><i class="bi bi-calendar3"></i> Added ' + escapeHtml(formatDateDisplay(l.DateAdded)) + '</div>' +
+          '<div class="d-flex gap-2 mt-2">' +
+            '<button type="button" class="btn btn-sm btn-light flex-fill" onclick="editLaptopRecord(\'' + l.InventoryID + '\')" title="View / Edit"><i class="bi bi-pencil"></i> Edit</button>' +
+            '<button type="button" class="btn btn-sm btn-light text-danger flex-fill" onclick="promptDeleteLaptop(\'' + l.InventoryID + '\', \'' + nameAttr + '\')" title="Delete"><i class="bi bi-trash"></i> Delete</button>' +
+          '</div>' +
+        '</div>'
+    );
+  }
+
+  function renderLaptopCards(records) {
+    var grid = document.getElementById('laptop-grid');
+    if (!records.length) {
+      grid.innerHTML = '<div class="text-center text-muted py-4" style="grid-column: 1 / -1;">No laptops in this section yet.</div>';
+      return;
+    }
+    grid.innerHTML = state.viewMode === 'list' ? laptopListTableHtml(records) : records.map(laptopCardHtml).join('');
+  }
+
+  function laptopUnitRowHtml(l) {
+    var nameAttr = escapeHtml((l.Manufacturer + ' ' + l.Model) || '').replace(/'/g, "\\'");
+    return (
+      '<div class="laptop-group-unit-row d-flex justify-content-between align-items-center py-1 border-top">' +
+        '<div class="small">' +
+          '<div>S/N ' + escapeHtml(l.SerialNumber || '—') + (l.AssetID ? ' · ' + escapeHtml(l.AssetID) : '') + '</div>' +
+          '<div class="text-muted">' + formatCurrency(l.Status === 'Sold' ? l.SalePrice : l.SellingPrice) + ' · Added ' + escapeHtml(formatDateDisplay(l.DateAdded)) + '</div>' +
+        '</div>' +
+        '<div class="d-flex gap-1">' +
+          '<button type="button" class="btn btn-sm btn-light" onclick="editLaptopRecord(\'' + l.InventoryID + '\')" title="Edit"><i class="bi bi-pencil"></i></button>' +
+          '<button type="button" class="btn btn-sm btn-light text-danger" onclick="promptDeleteLaptop(\'' + l.InventoryID + '\', \'' + nameAttr + '\')" title="Delete"><i class="bi bi-trash"></i></button>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  function groupCardHtml(g) {
+    var statusBadge = STATUS_BADGE[g.Status] || 'badge-inactive';
+    var priceRange = g.priceMin === g.priceMax ? formatCurrency(g.priceMin) : (formatCurrency(g.priceMin) + '–' + formatCurrency(g.priceMax));
+    var expanded = !!expandedGroups[g.key];
+    var unitsHtml = expanded
+      ? '<div class="laptop-group-units mt-2">' + g.units.map(laptopUnitRowHtml).join('') + '</div>'
+      : '';
+    var safeKey = g.key.replace(/'/g, "\\'");
+    return (
+      '<div class="inventory-card">' +
+        '<div class="inventory-card-top" style="cursor:pointer;" onclick="LaptopsGroups.toggle(\'' + safeKey + '\')">' +
+          '<span class="inventory-card-category"><i class="bi bi-laptop"></i> ' + g.count + ' units</span>' +
+          '<span class="inventory-card-qty">' + priceRange + '</span>' +
+        '</div>' +
+        '<div class="inventory-card-name" style="cursor:pointer;" onclick="LaptopsGroups.toggle(\'' + safeKey + '\')">' +
+          escapeHtml(g.Manufacturer + ' ' + g.Model) + ' <i class="bi ' + (expanded ? 'bi-chevron-up' : 'bi-chevron-down') + ' text-muted small"></i>' +
+        '</div>' +
+        '<div class="inventory-card-badges">' +
+          '<span class="badge ' + statusBadge + '">' + escapeHtml(g.Status) + '</span>' +
+          '<span class="badge bg-light text-dark">Total value: ' + formatCurrency(g.totalValue) + '</span>' +
+        '</div>' +
+        unitsHtml +
+      '</div>'
+    );
+  }
+
+  function groupRowHtml(g) {
+    var statusBadge = STATUS_BADGE[g.Status] || 'badge-inactive';
+    var priceRange = g.priceMin === g.priceMax ? formatCurrency(g.priceMin) : (formatCurrency(g.priceMin) + '–' + formatCurrency(g.priceMax));
+    var expanded = !!expandedGroups[g.key];
+    var safeKey = g.key.replace(/'/g, "\\'");
+    var rows = '<tr style="cursor:pointer;" onclick="LaptopsGroups.toggle(\'' + safeKey + '\')">' +
+      '<td>' + escapeHtml(g.Manufacturer + ' ' + g.Model) + ' <i class="bi ' + (expanded ? 'bi-chevron-up' : 'bi-chevron-down') + ' text-muted small"></i></td>' +
+      '<td>' + g.count + ' units</td>' +
+      '<td>' + priceRange + '</td>' +
+      '<td><span class="badge ' + statusBadge + '">' + escapeHtml(g.Status) + '</span></td>' +
+      '<td>' + formatCurrency(g.totalValue) + '</td>' +
+      '<td></td>' +
+    '</tr>';
+    if (expanded) {
+      rows += g.units.map(function (l) {
+        var nameAttr = escapeHtml((l.Manufacturer + ' ' + l.Model) || '').replace(/'/g, "\\'");
+        return (
+          '<tr class="table-light">' +
+            '<td class="ps-4 small text-muted">S/N ' + escapeHtml(l.SerialNumber || '—') + '</td>' +
+            '<td class="small text-muted">' + escapeHtml(l.AssetID || '—') + '</td>' +
+            '<td class="small text-muted">' + formatCurrency(l.Status === 'Sold' ? l.SalePrice : l.SellingPrice) + '</td>' +
+            '<td class="small text-muted">' + escapeHtml(formatDateDisplay(l.DateAdded)) + '</td>' +
+            '<td></td>' +
+            '<td class="text-end">' +
+              '<button type="button" class="btn btn-sm btn-light" onclick="editLaptopRecord(\'' + l.InventoryID + '\')" title="Edit"><i class="bi bi-pencil"></i></button> ' +
+              '<button type="button" class="btn btn-sm btn-light text-danger" onclick="promptDeleteLaptop(\'' + l.InventoryID + '\', \'' + nameAttr + '\')" title="Delete"><i class="bi bi-trash"></i></button>' +
+            '</td>' +
+          '</tr>'
+        );
+      }).join('');
+    }
+    return rows;
+  }
+
+  function groupListTableHtml(groups) {
+    return (
+      '<div style="grid-column:1/-1;" class="table-responsive"><table class="table table-sm align-middle">' +
+        '<thead><tr><th>Model</th><th>Units</th><th>Price range</th><th>Status</th><th>Total value</th><th></th></tr></thead>' +
+        '<tbody>' + groups.map(groupRowHtml).join('') + '</tbody>' +
+      '</table></div>'
+    );
+  }
+
+  function renderGroupCards(groups) {
+    var grid = document.getElementById('laptop-grid');
+    if (!groups.length) {
+      grid.innerHTML = '<div class="text-center text-muted py-4" style="grid-column: 1 / -1;">No laptops in this section yet.</div>';
+      return;
+    }
+    grid.innerHTML = state.viewMode === 'list' ? groupListTableHtml(groups) : groups.map(groupCardHtml).join('');
+  }
+
+  window.LaptopsGroups = {
+    toggle: function (key) {
+      expandedGroups[key] = !expandedGroups[key];
+      renderGroupCards(currentGroups);
+    }
+  };
+
+  function renderLaptopListSummary(p) {
+    var el = document.getElementById('laptop-summary');
+    var start = (p.page - 1) * p.pageSize + 1;
+    var end = Math.min(p.page * p.pageSize, p.totalRecords);
+    el.textContent = p.totalRecords === 0 ? 'No records' : ('Showing ' + start + '\u2013' + end + ' of ' + p.totalRecords);
+  }
+
+  function toggleSoldFields(isSold) {
+    var wrap = document.getElementById('laptop-sold-fields');
+    wrap.style.display = isSold ? 'block' : 'none';
+    ['laptop-buyer-name', 'laptop-sale-date', 'laptop-sale-price'].forEach(function (id) {
+      document.getElementById(id).required = isSold;
+    });
+  }
+
+  function openAddLaptopModal() {
+    var form = document.getElementById('laptop-form');
+    form.reset();
+    form.classList.remove('was-validated');
+    document.getElementById('laptop-id').value = '';
+    document.getElementById('laptop-date-added').value = new Date().toISOString().slice(0, 10);
+    document.getElementById('laptop-status').value = 'Current Stock';
+    toggleSoldFields(false);
+    document.getElementById('laptopModalLabel').textContent = 'Add Laptop';
+    document.getElementById('laptop-save-btn').textContent = 'Save Laptop';
+
+    var token = localStorage.getItem(MNE_SESSION_KEY);
+    runServer('suggestNextLaptopOrderNumber', token).then(function (res) {
+      if (res.success) document.getElementById('laptop-order-number').value = res.data;
+    });
+
+    laptopModal.show();
+  }
+
+  window.editLaptopRecord = function (id) {
+    var l = currentRecords.find(function (r) { return r.InventoryID === id; });
+    if (!l) return;
+
+    document.getElementById('laptop-id').value = l.InventoryID;
+    document.getElementById('laptop-assetid').value = l.AssetID;
+    document.getElementById('laptop-manufacturer').value = l.Manufacturer;
+    document.getElementById('laptop-model').value = l.Model;
+    document.getElementById('laptop-serial').value = l.SerialNumber;
+    document.getElementById('laptop-processor').value = l.Processor;
+    document.getElementById('laptop-ram').value = l.RAM;
+    document.getElementById('laptop-storage').value = l.Storage;
+    document.getElementById('laptop-screensize').value = l.ScreenSize;
+    document.getElementById('laptop-os').value = l.OperatingSystem;
+    document.getElementById('laptop-condition').value = l.Condition;
+    document.getElementById('laptop-selling-price').value = l.SellingPrice;
+    document.getElementById('laptop-date-added').value = l.DateAdded;
+    document.getElementById('laptop-status').value = l.Status;
+    document.getElementById('laptop-order-number').value = l.OrderNumber;
+    document.getElementById('laptop-po-number').value = l.PurchaseOrderNumber;
+    document.getElementById('laptop-notes').value = l.Notes;
+    document.getElementById('laptop-buyer-name').value = l.BuyerName;
+    document.getElementById('laptop-sale-date').value = l.SaleDate;
+    document.getElementById('laptop-sale-price').value = l.SalePrice;
+
+    toggleSoldFields(l.Status === 'Sold');
+    document.getElementById('laptopModalLabel').textContent = 'Edit Laptop';
+    document.getElementById('laptop-save-btn').textContent = 'Save Changes';
+    document.getElementById('laptop-form').classList.remove('was-validated');
+    laptopModal.show();
+  };
+
+  function handleSaveLaptop(e) {
+    e.preventDefault();
+    var form = document.getElementById('laptop-form');
+    if (!form.checkValidity()) {
+      form.classList.add('was-validated');
+      return;
+    }
+
+    var id = document.getElementById('laptop-id').value;
+    var data = {
+      AssetID: document.getElementById('laptop-assetid').value.trim(),
+      Manufacturer: document.getElementById('laptop-manufacturer').value.trim(),
+      Model: document.getElementById('laptop-model').value.trim(),
+      SerialNumber: document.getElementById('laptop-serial').value.trim(),
+      Processor: document.getElementById('laptop-processor').value.trim(),
+      RAM: document.getElementById('laptop-ram').value.trim(),
+      Storage: document.getElementById('laptop-storage').value.trim(),
+      ScreenSize: document.getElementById('laptop-screensize').value.trim(),
+      OperatingSystem: document.getElementById('laptop-os').value.trim(),
+      Condition: document.getElementById('laptop-condition').value,
+      SellingPrice: document.getElementById('laptop-selling-price').value,
+      DateAdded: document.getElementById('laptop-date-added').value,
+      Status: document.getElementById('laptop-status').value,
+      OrderNumber: document.getElementById('laptop-order-number').value.trim(),
+      PurchaseOrderNumber: document.getElementById('laptop-po-number').value.trim(),
+      Notes: document.getElementById('laptop-notes').value.trim(),
+      BuyerName: document.getElementById('laptop-buyer-name').value.trim(),
+      SaleDate: document.getElementById('laptop-sale-date').value,
+      SalePrice: document.getElementById('laptop-sale-price').value
+    };
+
+    var token = localStorage.getItem(MNE_SESSION_KEY);
+    var btn = document.getElementById('laptop-save-btn');
+    btn.disabled = true; btn.textContent = 'Saving…';
+
+    var call = id ? runServer('updateLaptop', token, id, data) : runServer('addLaptop', token, data);
+    call.then(function (res) {
+      btn.disabled = false; btn.textContent = id ? 'Save Changes' : 'Save Laptop';
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      laptopModal.hide();
+      showToast(id ? 'Laptop updated successfully.' : 'Laptop added successfully.', 'success');
+      fetchLaptops();
+      refreshTabCounts();
+      loadLaptopFilterValues();
+    }).catch(function (err) {
+      btn.disabled = false; btn.textContent = id ? 'Save Changes' : 'Save Laptop';
+      showToast(err.message, 'danger');
+    });
+  }
+
+  window.promptDeleteLaptop = function (id, name) {
+    pendingDeleteId = id;
+    document.getElementById('delete-laptop-name').textContent = name;
+    laptopDeleteModal.show();
+  };
+
+  function handleConfirmDeleteLaptop() {
+    if (!pendingDeleteId) return;
+    var token = localStorage.getItem(MNE_SESSION_KEY);
+    runServer('deleteLaptop', token, pendingDeleteId).then(function (res) {
+      laptopDeleteModal.hide();
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Laptop deleted.', 'success');
+      fetchLaptops();
+      refreshTabCounts();
+    }).catch(function (err) {
+      laptopDeleteModal.hide();
+      showToast(err.message, 'danger');
+    });
+  }
+
+  // ---------------- Import from Spreadsheet ----------------
+
+  function initImportUI() {
+    document.getElementById('btn-import-laptops').addEventListener('click', function () {
+      resetImportModal();
+      importModal.show();
+    });
+    document.getElementById('btn-download-template').addEventListener('click', downloadLaptopTemplate);
+    document.getElementById('laptop-import-file').addEventListener('change', handleImportFileSelected);
+    document.getElementById('btn-import-start-over').addEventListener('click', resetImportModal);
+    document.getElementById('btn-confirm-import').addEventListener('click', handleConfirmImport);
+  }
+
+  function resetImportModal() {
+    document.getElementById('laptop-import-file').value = '';
+    document.getElementById('import-parse-status').innerHTML = '';
+    document.getElementById('import-step-upload').style.display = 'block';
+    document.getElementById('import-step-preview').style.display = 'none';
+    document.getElementById('btn-import-start-over').style.display = 'none';
+    document.getElementById('btn-confirm-import').style.display = 'none';
+    parsedImportRows = [];
+    importPreviewResult = null;
+  }
+
+  function downloadLaptopTemplate() {
+    var headers = ['purchaseordernum', 'salesordernum', 'Barcode', 'customerid', 'stockid', 'categoryname',
+      'ManName', 'modelname', 'Blancco Processor', 'RAM', 'HDD', 'CD?', 'MEMORYTOTAL', 'MEMORYBANKS', 'SerialNumber', 'collectionid'];
+    var example = ['PO-1001', 'SO-2001', 'BC0001', '', 'ST0001', 'Laptop', 'Dell', 'Latitude 5410', 'Intel Core i5-8350U', '8GB', '256GB SSD', 'No', '8GB', '1', 'SN-991823', ''];
+    var csv = headers.join(',') + '\n' + example.map(function (v) { return csvEscape(v); }).join(',') + '\n';
+    var blob = new Blob([csv], { type: 'text/csv' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'laptop-inventory-template.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+
+  function csvEscape(v) {
+    v = String(v == null ? '' : v);
+    return /[",\n]/.test(v) ? ('"' + v.replace(/"/g, '""') + '"') : v;
+  }
+
+  function normalizeHeader(h) {
+    return String(h || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  }
+
+  function buildAliasLookup() {
+    var lookup = {};
+    Object.keys(IMPORT_COLUMN_ALIASES).forEach(function (canonical) {
+      IMPORT_COLUMN_ALIASES[canonical].forEach(function (alias) { lookup[alias] = canonical; });
+    });
+    return lookup;
+  }
+
+  function handleImportFileSelected(e) {
+    var file = e.target.files[0];
+    var statusEl = document.getElementById('import-parse-status');
+    if (!file) return;
+
+    statusEl.innerHTML = '<span class="text-muted"><i class="bi bi-hourglass-split"></i> Reading file…</span>';
+
+    var reader = new FileReader();
+    reader.onload = function (evt) {
+      try {
+        var data = new Uint8Array(evt.target.result);
+        var workbook = XLSX.read(data, { type: 'array' });
+        var firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+        var rows = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: '', raw: false });
+
+        if (!rows.length) {
+          statusEl.innerHTML = '<span class="text-danger">That file has no rows.</span>';
+          return;
+        }
+
+        var headerRow = rows[0];
+        var aliasLookup = buildAliasLookup();
+        var colIndexByCanonical = {};
+        headerRow.forEach(function (h, idx) {
+          var norm = normalizeHeader(h);
+          var canonical = aliasLookup[norm];
+          if (canonical && colIndexByCanonical[canonical] === undefined) {
+            colIndexByCanonical[canonical] = idx;
+          }
+        });
+
+        var mapped = [];
+        for (var r = 1; r < rows.length; r++) {
+          var raw = rows[r];
+          if (!raw || raw.every(function (c) { return String(c).trim() === ''; })) continue;
+
+          function col(canonical) {
+            var idx = colIndexByCanonical[canonical];
+            return idx === undefined ? '' : String(raw[idx] == null ? '' : raw[idx]).trim();
+          }
+
+          var noteParts = [];
+          if (col('collectionId')) noteParts.push('Collection ID: ' + col('collectionId'));
+          if (col('memoryBanks')) noteParts.push('Memory banks: ' + col('memoryBanks'));
+          if (col('cdDrive')) noteParts.push('Optical drive: ' + col('cdDrive'));
+          if (col('customerId')) noteParts.push('Customer ID: ' + col('customerId'));
+
+          mapped.push({
+            rowNumber: r + 1,
+            AssetID: col('assetid'),
+            Manufacturer: col('manufacturer'),
+            Model: col('model'),
+            SerialNumber: col('serialNumber'),
+            Processor: col('processor'),
+            RAM: col('ram'),
+            Storage: col('storage'),
+            PurchaseOrderNumber: col('purchaseOrderNumber'),
+            SalesOrderNumber: col('salesOrderNumber'),
+            Notes: noteParts.join('; ')
+          });
+        }
+
+        parsedImportRows = mapped;
+
+        if (!mapped.length) {
+          statusEl.innerHTML = '<span class="text-danger">No data rows found after the header row.</span>';
+          return;
+        }
+
+        statusEl.innerHTML = '<span class="text-muted"><i class="bi bi-hourglass-split"></i> Validating ' + mapped.length + ' row(s)…</span>';
+        runValidationPreview();
+      } catch (err) {
+        statusEl.innerHTML = '<span class="text-danger">Could not read that file: ' + escapeHtml(err.message) + '</span>';
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  function runValidationPreview() {
+    var token = localStorage.getItem(MNE_SESSION_KEY);
+    runServer('previewLaptopImport', token, parsedImportRows).then(function (res) {
+      if (!res.success) {
+        document.getElementById('import-parse-status').innerHTML = '<span class="text-danger">' + escapeHtml(res.message) + '</span>';
+        return;
+      }
+      importPreviewResult = res.data;
+      renderImportPreview();
+    }).catch(function (err) {
+      document.getElementById('import-parse-status').innerHTML = '<span class="text-danger">' + escapeHtml(err.message) + '</span>';
+    });
+  }
+
+  function renderImportPreview() {
+    document.getElementById('import-step-upload').style.display = 'none';
+    document.getElementById('import-step-preview').style.display = 'block';
+    document.getElementById('btn-import-start-over').style.display = 'inline-block';
+
+    document.getElementById('import-order-number').value = importPreviewResult.suggestedOrderNumber;
+
+    var validCount = importPreviewResult.validRows.length;
+    var errorCount = importPreviewResult.errorRows.length;
+    document.getElementById('import-counts').innerHTML =
+      '<span class="text-success">' + validCount + ' row(s) ready to import</span>' +
+      (errorCount ? ' &nbsp;\u2022&nbsp; <span class="text-danger">' + errorCount + ' row(s) with errors</span>' : '');
+
+    var errorsSection = document.getElementById('import-errors-section');
+    if (errorCount) {
+      errorsSection.style.display = 'block';
+      document.getElementById('import-errors-tbody').innerHTML = importPreviewResult.errorRows.map(function (row) {
+        return (
+          '<tr class="import-error-row">' +
+            '<td>' + row.rowNumber + '</td>' +
+            '<td>' + escapeHtml(row.data.SerialNumber || '\u2014') + '</td>' +
+            '<td>' + escapeHtml((row.data.Manufacturer || '') + ' ' + (row.data.Model || '')) + '</td>' +
+            '<td>' + escapeHtml(row.errors.join(' ')) + '</td>' +
+          '</tr>'
+        );
+      }).join('');
+    } else {
+      errorsSection.style.display = 'none';
+    }
+
+    document.getElementById('import-valid-tbody').innerHTML = importPreviewResult.validRows.map(function (row) {
+      var d = row.data;
+      return (
+        '<tr>' +
+          '<td>' + escapeHtml(d.AssetID || '\u2014') + '</td>' +
+          '<td>' + escapeHtml(d.Manufacturer || '\u2014') + '</td>' +
+          '<td>' + escapeHtml(d.Model || '\u2014') + '</td>' +
+          '<td>' + escapeHtml(d.SerialNumber || '\u2014') + '</td>' +
+          '<td>' + escapeHtml(d.Processor || '\u2014') + '</td>' +
+          '<td>' + escapeHtml(d.RAM || '\u2014') + '</td>' +
+          '<td>' + escapeHtml(d.Storage || '\u2014') + '</td>' +
+        '</tr>'
+      );
+    }).join('');
+
+    document.getElementById('btn-confirm-import').style.display = validCount ? 'inline-block' : 'none';
+  }
+
+  function handleConfirmImport() {
+    if (!importPreviewResult || !importPreviewResult.validRows.length) return;
+    var orderNumber = document.getElementById('import-order-number').value.trim();
+    if (!orderNumber) {
+      showToast('Please enter an order number for this stock list.', 'danger');
+      return;
+    }
+
+    var btn = document.getElementById('btn-confirm-import');
+    btn.disabled = true;
+    btn.textContent = 'Importing…';
+
+    var token = localStorage.getItem(MNE_SESSION_KEY);
+    runServer('confirmLaptopImport', token, importPreviewResult.validRows, orderNumber).then(function (res) {
+      btn.disabled = false;
+      btn.textContent = 'Confirm Import';
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+
+      importModal.hide();
+      var msg = 'Imported ' + res.data.inserted + ' laptop(s) into Current Stock under ' + res.data.orderNumber + '.';
+      if (res.data.skipped.length) msg += ' ' + res.data.skipped.length + ' row(s) were skipped.';
+      showToast(msg, 'success');
+
+      document.querySelectorAll('.pill-tab').forEach(function (t) { t.classList.remove('active'); });
+      document.querySelector('.pill-tab[data-status="Current Stock"]').classList.add('active');
+      state.status = 'Current Stock';
+      state.page = 1;
+      fetchLaptops();
+      refreshTabCounts();
+      loadLaptopFilterValues();
+    }).catch(function (err) {
+      btn.disabled = false;
+      btn.textContent = 'Confirm Import';
+      showToast(err.message, 'danger');
+    });
+  }
+})();
+</script>

@@ -1,0 +1,88 @@
+<script>
+(function () {
+  var provisionModal;
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'syncdevices') return;
+    if (!window.MNE_CURRENT_USER || window.MNE_CURRENT_USER.role !== 'Admin') return;
+    initSyncDevicesPage();
+  });
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  function initSyncDevicesPage() {
+    provisionModal = new bootstrap.Modal(document.getElementById('provisionDeviceModal'));
+    document.getElementById('btn-provision-device').addEventListener('click', openProvisionModal);
+    document.getElementById('provision-form').addEventListener('submit', handleProvision);
+    fetchDevices();
+  }
+
+  function openProvisionModal() {
+    document.getElementById('provision-form').reset();
+    document.getElementById('provision-result').classList.add('d-none');
+    document.getElementById('provision-save-btn').classList.remove('d-none');
+    runServer('getHubOptions', token()).then(function (res) {
+      if (!res.success) return;
+      document.getElementById('provision-hub').innerHTML = '<option value="">Select…</option>' +
+        res.data.map(function (h) { return '<option value="' + h.id + '">' + escapeHtml(h.name) + '</option>'; }).join('');
+    });
+    provisionModal.show();
+  }
+
+  function handleProvision(e) {
+    e.preventDefault();
+    var form = document.getElementById('provision-form');
+    if (!form.checkValidity()) { form.classList.add('was-validated'); return; }
+
+    var data = {
+      DeviceID: document.getElementById('provision-deviceid').value.trim(),
+      HubID: document.getElementById('provision-hub').value,
+      DeviceLabel: document.getElementById('provision-label').value.trim()
+    };
+
+    var btn = document.getElementById('provision-save-btn');
+    btn.disabled = true;
+    runServer('provisionSyncDevice', token(), data).then(function (res) {
+      btn.disabled = false;
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      var box = document.getElementById('provision-result');
+      box.classList.remove('d-none');
+      box.innerHTML = '<strong>Save this API key now — it will not be shown again:</strong>' +
+        '<div class="mt-2 p-2 bg-white border rounded font-monospace small">' + escapeHtml(res.data.apiKey) + '</div>';
+      btn.classList.add('d-none');
+      showToast('Device provisioned.', 'success');
+      fetchDevices();
+    }).catch(function (err) { btn.disabled = false; showToast(err.message, 'danger'); });
+  }
+
+  function fetchDevices() {
+    var tbody = document.getElementById('devices-table-body');
+    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">Loading…</td></tr>';
+    runServer('getSyncDevices', token()).then(function (res) {
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="6" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      if (!res.data.length) { tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">No devices provisioned yet.</td></tr>'; return; }
+      tbody.innerHTML = res.data.map(function (d) {
+        var active = d.Active === true || d.Active === 'true';
+        return '<tr>' +
+          '<td class="text-muted">' + escapeHtml(d.DeviceID) + '</td>' +
+          '<td>' + escapeHtml(d.HubName || '') + '</td>' +
+          '<td class="fw-medium">' + escapeHtml(d.DeviceLabel) + '</td>' +
+          '<td><span class="badge ' + (active ? 'badge-active' : 'badge-inactive') + '">' + (active ? 'Active' : 'Inactive') + '</span></td>' +
+          '<td>' + (d.LastSyncAt ? new Date(d.LastSyncAt).toLocaleString() : 'Never') + '</td>' +
+          '<td class="text-end"><button class="btn btn-sm btn-light" onclick="SyncDevices.toggleActive(\'' + d.DeviceID + '\', ' + !active + ')">' + (active ? 'Deactivate' : 'Activate') + '</button></td>' +
+        '</tr>';
+      }).join('');
+    });
+  }
+
+  window.SyncDevices = {
+    toggleActive: function (deviceId, newActive) {
+      runServer('setSyncDeviceActive', token(), deviceId, newActive).then(function (res) {
+        if (!res.success) { showToast(res.message, 'danger'); return; }
+        showToast('Updated.', 'success');
+        fetchDevices();
+      });
+    }
+  };
+})();
+</script>

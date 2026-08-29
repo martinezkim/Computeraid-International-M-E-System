@@ -1,0 +1,696 @@
+<script>
+(function () {
+  var accountModal, fundingModal, adjustmentModal, reasonModal;
+  var uploadStatementModal, statementDetailModal, matchCandidateModal, resolveReconciliationModal;
+  var pendingReason; // { kind: 'cancelfunding' | 'rejectadjustment', id }
+  var hubOptionsCache = [];
+  var projectOptionsCache = [];
+  var accountOptionsCache = [];
+  var currencyCatalog = [];
+  var fundingDocUpload, adjustmentDocUpload, statementDocUpload;
+  var statementsCache = [];
+  var rawStatementCsvText = '';
+  var currentStatementId = null;
+  var currentStatementAccountId = null;
+  var currentStatementCurrency = null;
+  var pendingMatchTransactionId = null;
+  var pendingResolveReconciliationId = null;
+  var accountsFilter = { hubId: '', countryId: '' };
+  var fundingFilter = { hubId: '', countryId: '' };
+  var adjustmentsFilter = { countryId: '' };
+  var reconciliationFilter = { countryId: '' };
+
+  document.addEventListener('page:loaded', function (e) {
+    if (e.detail.page !== 'financeaccounts') return;
+    if (!window.MNE_CURRENT_USER || window.MNE_CURRENT_USER.role !== 'Admin') return;
+    initFinanceAccountsPage();
+  });
+
+  function token() { return localStorage.getItem(MNE_SESSION_KEY); }
+
+  function initFinanceAccountsPage() {
+    accountModal = new bootstrap.Modal(document.getElementById('financeAccountModal'));
+    fundingModal = new bootstrap.Modal(document.getElementById('fundingModal'));
+    adjustmentModal = new bootstrap.Modal(document.getElementById('adjustmentModal'));
+    reasonModal = new bootstrap.Modal(document.getElementById('financeReasonModal'));
+    uploadStatementModal = new bootstrap.Modal(document.getElementById('uploadStatementModal'));
+    statementDetailModal = new bootstrap.Modal(document.getElementById('statementDetailModal'));
+    matchCandidateModal = new bootstrap.Modal(document.getElementById('matchCandidateModal'));
+    resolveReconciliationModal = new bootstrap.Modal(document.getElementById('resolveReconciliationModal'));
+
+    document.querySelectorAll('.pill-tab').forEach(function (tab) {
+      tab.addEventListener('click', function () { switchTab(tab.dataset.tab); });
+    });
+
+    document.getElementById('btn-add-account').addEventListener('click', openAddAccount);
+    document.getElementById('financeaccount-form').addEventListener('submit', handleSaveAccount);
+
+    document.getElementById('btn-add-funding').addEventListener('click', openAddFunding);
+    document.getElementById('funding-form').addEventListener('submit', handleSaveFunding);
+
+    document.getElementById('btn-add-adjustment').addEventListener('click', openAddAdjustment);
+    document.getElementById('adjustment-form').addEventListener('submit', handleSaveAdjustment);
+
+    document.getElementById('confirm-finance-reason').addEventListener('click', handleConfirmReason);
+
+    fundingDocUpload = initFinanceDocumentUpload({
+      inputId: 'funding-document-input',
+      statusId: 'funding-document-status',
+      documentType: 'Funding Proof'
+    });
+    adjustmentDocUpload = initFinanceDocumentUpload({
+      inputId: 'adjustment-document-input',
+      statusId: 'adjustment-document-status',
+      documentType: 'Adjustment Support'
+    });
+    statementDocUpload = initFinanceDocumentUpload({
+      inputId: 'statement-csv-input',
+      statusId: 'statement-document-status',
+      documentType: 'Bank Statement'
+    });
+
+    document.getElementById('btn-upload-statement').addEventListener('click', openUploadStatementModal);
+    document.getElementById('statement-csv-input').addEventListener('change', handleStatementFileSelected);
+    document.getElementById('statement-mode-single').addEventListener('change', updateAmountModeVisibility);
+    document.getElementById('statement-mode-debitcredit').addEventListener('change', updateAmountModeVisibility);
+    document.getElementById('btn-import-statement').addEventListener('click', handleImportStatement);
+    document.getElementById('btn-automatch-statement').addEventListener('click', handleAutoMatch);
+    document.getElementById('confirm-resolve-reconciliation').addEventListener('click', handleConfirmResolveReconciliation);
+
+    document.getElementById('accounts-country-filter').addEventListener('change', function (e) { accountsFilter.countryId = e.target.value; fetchAccounts(); });
+    document.getElementById('accounts-hub-filter').addEventListener('change', function (e) { accountsFilter.hubId = e.target.value; fetchAccounts(); });
+    document.getElementById('funding-country-filter').addEventListener('change', function (e) { fundingFilter.countryId = e.target.value; fetchFunding(); });
+    document.getElementById('funding-hub-filter').addEventListener('change', function (e) { fundingFilter.hubId = e.target.value; fetchFunding(); });
+    document.getElementById('adjustments-country-filter').addEventListener('change', function (e) { adjustmentsFilter.countryId = e.target.value; fetchAdjustments(); });
+    document.getElementById('reconciliation-country-filter').addEventListener('change', function (e) { reconciliationFilter.countryId = e.target.value; fetchStatements(); });
+
+    // Sequential, not Promise.all — Apps Script queues concurrent doPost
+    // executions against the same deployment rather than truly running
+    // them in parallel, so 4-at-once measurably compounds into a much
+    // longer worst-case wait than the same 4 calls run one after another.
+    loadHubOptions().then(loadCountryOptions).then(loadProjectOptions).then(loadCurrencyCatalog).then(loadAccountOptions).then(fetchAccounts);
+  }
+
+  function loadHubOptions() {
+    return runServer('getHubOptions', token()).then(function (res) {
+      if (!res.success) return;
+      hubOptionsCache = res.data;
+      var opts = hubOptionsCache.map(function (h) { return '<option value="' + h.id + '">' + escapeHtml(h.name) + '</option>'; }).join('');
+      document.getElementById('financeaccount-hubid').innerHTML = '<option value="">— Org-wide —</option>' + opts;
+      document.getElementById('accounts-hub-filter').innerHTML = '<option value="">All Hubs</option>' + opts;
+      document.getElementById('funding-hub-filter').innerHTML = '<option value="">All Hubs</option>' + opts;
+    });
+  }
+
+  function loadCountryOptions() {
+    return runServer('getCountryOptions', token()).then(function (res) {
+      if (!res.success) return;
+      var opts = res.data.map(function (c) { return '<option value="' + c.id + '">' + escapeHtml(c.name) + '</option>'; }).join('');
+      document.getElementById('accounts-country-filter').innerHTML = '<option value="">All Countries</option>' + opts;
+      document.getElementById('funding-country-filter').innerHTML = '<option value="">All Countries</option>' + opts;
+      document.getElementById('adjustments-country-filter').innerHTML = '<option value="">All Countries</option>' + opts;
+      document.getElementById('reconciliation-country-filter').innerHTML = '<option value="">All Countries</option>' + opts;
+    });
+  }
+
+  function loadProjectOptions() {
+    return runServer('getProjectOptions', token()).then(function (res) {
+      if (!res.success) return;
+      projectOptionsCache = res.data;
+      var opts = projectOptionsCache.map(function (p) { return '<option value="' + p.id + '">' + escapeHtml(p.name) + '</option>'; }).join('');
+      document.getElementById('financeaccount-projectid').innerHTML = '<option value="">— None —</option>' + opts;
+      document.getElementById('funding-projectid').innerHTML = '<option value="">— None —</option>' + opts;
+    });
+  }
+
+  function loadCurrencyCatalog() {
+    return runServer('getSystemCurrency', token()).then(function (res) {
+      if (!res.success) return;
+      currencyCatalog = res.data.catalog || [];
+      document.getElementById('financeaccount-currency').innerHTML = currencyCatalog
+        .map(function (c) { return '<option value="' + c.code + '">' + c.code + ' — ' + escapeHtml(c.name) + '</option>'; }).join('');
+      document.getElementById('financeaccount-currency').value = res.data.code;
+      document.getElementById('financeaccount-currency-note').textContent = 'System default is ' + res.data.code + '. Change here only if this specific account holds a different currency.';
+    });
+  }
+
+  function loadAccountOptions() {
+    return runServer('getFinancialAccountOptions', token()).then(function (res) {
+      if (!res.success) return;
+      accountOptionsCache = res.data;
+      var opts = accountOptionsCache.map(function (a) { return '<option value="' + a.id + '">' + escapeHtml(a.name) + ' (' + a.currency + ')</option>'; }).join('');
+      document.getElementById('funding-accountid').innerHTML = opts;
+      document.getElementById('adjustment-accountid').innerHTML = opts;
+      document.getElementById('statement-accountid').innerHTML = opts;
+    });
+  }
+
+  function switchTab(tabKey) {
+    document.querySelectorAll('.pill-tab').forEach(function (t) { t.classList.toggle('active', t.dataset.tab === tabKey); });
+    document.querySelectorAll('.usage-config-pane').forEach(function (p) { p.classList.add('d-none'); });
+    document.getElementById('pane-' + tabKey).classList.remove('d-none');
+    if (tabKey === 'accounts') fetchAccounts();
+    if (tabKey === 'funding') fetchFunding();
+    if (tabKey === 'adjustments') fetchAdjustments();
+    if (tabKey === 'reconciliation') fetchStatements();
+  }
+
+  // ---------- Accounts ----------
+  var accountsCache = [];
+
+  function fetchAccounts() {
+    runServer('getFinancialAccounts', token(), { page: 1, pageSize: 1000, hubId: accountsFilter.hubId, countryId: accountsFilter.countryId }).then(function (res) {
+      var tbody = document.getElementById('accounts-table-body');
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="8" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      accountsCache = res.data.records;
+      if (!accountsCache.length) { tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">No accounts yet.</td></tr>'; return; }
+      tbody.innerHTML = accountsCache.map(function (a) {
+        var badge = a.Status === 'Active' ? 'badge-active' : 'badge-inactive';
+        return '<tr>' +
+          '<td class="fw-medium">' + escapeHtml(a.AccountName) + '</td>' +
+          '<td>' + escapeHtml(a.BankName || '') + '</td>' +
+          '<td class="text-muted">' + escapeHtml(a.AccountNumberMasked || '') + '</td>' +
+          '<td>' + escapeHtml(a.Currency) + '</td>' +
+          '<td>' + escapeHtml(a.AccountType) + '</td>' +
+          '<td>' + escapeHtml(a.HubName || '') + '</td>' +
+          '<td><span class="badge ' + badge + '">' + escapeHtml(a.Status) + '</span></td>' +
+          '<td class="text-end"><button class="btn btn-sm btn-light" onclick="FinanceAccounts.editAccount(\'' + a.AccountID + '\')" title="Edit"><i class="bi bi-pencil"></i></button></td>' +
+        '</tr>';
+      }).join('');
+      loadAccountOptions();
+    });
+  }
+
+  function openAddAccount() {
+    document.getElementById('financeaccount-form').reset();
+    document.getElementById('financeaccount-id').value = '';
+    document.getElementById('financeAccountModalLabel').textContent = 'Add Account';
+    document.getElementById('financeaccount-currency').disabled = false;
+    document.getElementById('financeaccount-openingbalance').disabled = false;
+    document.getElementById('financeaccount-openingdate').disabled = false;
+    document.getElementById('financeaccount-openingbalance').value = '0';
+    document.getElementById('financeaccount-openingdate').value = new Date().toISOString().slice(0, 10);
+    document.getElementById('financeaccount-opening-locked-note').textContent = '';
+    document.getElementById('financeaccount-status-wrap').style.display = 'none';
+    accountModal.show();
+  }
+
+  function openEditAccount(id) {
+    var a = accountsCache.filter(function (r) { return r.AccountID === id; })[0];
+    if (!a) return;
+    document.getElementById('financeaccount-form').reset();
+    document.getElementById('financeaccount-id').value = a.AccountID;
+    document.getElementById('financeaccount-name').value = a.AccountName;
+    document.getElementById('financeaccount-bankname').value = a.BankName || '';
+    document.getElementById('financeaccount-accountnumber').value = '';
+    document.getElementById('financeaccount-accountnumber').placeholder = a.AccountNumberMasked ? 'Currently ' + a.AccountNumberMasked + ' — leave blank to keep' : '';
+    document.getElementById('financeaccount-type').value = a.AccountType;
+    document.getElementById('financeaccount-currency').value = a.Currency;
+    document.getElementById('financeaccount-currency').disabled = true;
+    document.getElementById('financeaccount-hubid').value = a.HubID || '';
+    document.getElementById('financeaccount-projectid').value = a.ProjectID || '';
+    document.getElementById('financeaccount-openingbalance').value = a.OpeningBalance;
+    document.getElementById('financeaccount-openingbalance').disabled = true;
+    document.getElementById('financeaccount-openingdate').value = a.OpeningBalanceDate;
+    document.getElementById('financeaccount-openingdate').disabled = true;
+    document.getElementById('financeaccount-opening-locked-note').textContent = 'Opening balance cannot be edited after creation — use a Balance Adjustment instead.';
+    document.getElementById('financeaccount-status-wrap').style.display = '';
+    document.getElementById('financeaccount-status').value = a.Status;
+    document.getElementById('financeAccountModalLabel').textContent = 'Edit Account';
+    accountModal.show();
+  }
+
+  function handleSaveAccount(e) {
+    e.preventDefault();
+    var id = document.getElementById('financeaccount-id').value;
+    var accountNumberInput = document.getElementById('financeaccount-accountnumber').value.trim();
+    var data = {
+      AccountName: document.getElementById('financeaccount-name').value.trim(),
+      BankName: document.getElementById('financeaccount-bankname').value.trim(),
+      AccountType: document.getElementById('financeaccount-type').value,
+      HubID: document.getElementById('financeaccount-hubid').value,
+      ProjectID: document.getElementById('financeaccount-projectid').value
+    };
+    if (id) {
+      // Editing: an empty AccountNumber field means "keep the existing
+      // one" (we never show the real number back to re-type), so only
+      // send it if the user actually typed something.
+      // Blank means "leave the stored number unchanged" — the field is
+      // never pre-filled with the real number (only the masked display),
+      // so only send AccountNumber when the user actually typed one.
+      if (accountNumberInput) data.AccountNumber = accountNumberInput;
+      data.Status = document.getElementById('financeaccount-status').value;
+    } else {
+      data.AccountNumber = accountNumberInput;
+      data.Currency = document.getElementById('financeaccount-currency').value;
+      data.OpeningBalance = document.getElementById('financeaccount-openingbalance').value;
+      data.OpeningBalanceDate = document.getElementById('financeaccount-openingdate').value;
+    }
+    var call = id ? runServer('updateFinancialAccount', token(), id, data) : runServer('addFinancialAccount', token(), data);
+    call.then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      accountModal.hide();
+      showToast('Account saved.', 'success');
+      fetchAccounts();
+    });
+  }
+
+  // ---------- Funding ----------
+  var fundingCache = [];
+
+  function fetchFunding() {
+    runServer('getFundingTransactions', token(), { page: 1, pageSize: 1000, hubId: fundingFilter.hubId, countryId: fundingFilter.countryId }).then(function (res) {
+      var tbody = document.getElementById('funding-table-body');
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="6" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      fundingCache = res.data.records;
+      if (!fundingCache.length) { tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">No funding recorded yet.</td></tr>'; return; }
+      tbody.innerHTML = fundingCache.map(function (f) {
+        var account = accountOptionsCache.filter(function (a) { return a.id === f.AccountID; })[0];
+        var badge = f.Status === 'Confirmed' ? 'badge-active' : (f.Status === 'Cancelled' ? 'badge-inactive' : 'bg-warning text-dark');
+        var actions = (f.Status === 'Recorded'
+          ? '<button class="btn btn-sm btn-light me-1" onclick="FinanceAccounts.confirmFunding(\'' + f.FundingID + '\')" title="Confirm"><i class="bi bi-check-lg"></i></button>'
+          : '') +
+          // Cancel is available for Recorded AND Confirmed entries (e.g. a
+          // mistaken/test entry that was already confirmed) — cancelling a
+          // Confirmed one is what actually removes it from every balance
+          // figure, since only Status='Confirmed' rows are ever summed.
+          (f.Status !== 'Cancelled'
+            ? '<button class="btn btn-sm btn-light text-danger me-1" onclick="FinanceAccounts.promptCancelFunding(\'' + f.FundingID + '\')" title="Cancel"><i class="bi bi-x-lg"></i></button>'
+            : '') +
+          (f.DocumentID ? '<button class="btn btn-sm btn-light" onclick="FinanceAccounts.viewDocument(\'' + f.DocumentID + '\')" title="View attached proof"><i class="bi bi-paperclip"></i></button>' : '');
+        return '<tr>' +
+          '<td>' + escapeHtml(f.DateReceived) + '</td>' +
+          '<td class="fw-medium">' + escapeHtml(f.FundingSource) + (f.Donor ? '<div class="small text-muted">' + escapeHtml(f.Donor) + '</div>' : '') + '</td>' +
+          '<td>' + escapeHtml(account ? account.name : f.AccountID) + '</td>' +
+          '<td>' + formatCurrencyIn(f.Amount, f.Currency) + '</td>' +
+          '<td><span class="badge ' + badge + '">' + escapeHtml(f.Status) + '</span></td>' +
+          '<td class="text-end">' + actions + '</td>' +
+        '</tr>';
+      }).join('');
+    });
+  }
+
+  function openAddFunding() {
+    document.getElementById('funding-form').reset();
+    document.getElementById('funding-date').value = new Date().toISOString().slice(0, 10);
+    fundingDocUpload.reset();
+    fundingModal.show();
+  }
+
+  function handleSaveFunding(e) {
+    e.preventDefault();
+    var accountId = document.getElementById('funding-accountid').value;
+    var account = accountOptionsCache.filter(function (a) { return a.id === accountId; })[0];
+    var data = {
+      DateReceived: document.getElementById('funding-date').value,
+      Amount: document.getElementById('funding-amount').value,
+      Currency: account ? account.currency : '',
+      AccountID: accountId,
+      FundingSource: document.getElementById('funding-source').value.trim(),
+      Donor: document.getElementById('funding-donor').value.trim(),
+      ProjectID: document.getElementById('funding-projectid').value,
+      ReferenceNumber: document.getElementById('funding-reference').value.trim(),
+      Description: document.getElementById('funding-description').value.trim(),
+      DocumentID: fundingDocUpload.getDocumentId()
+    };
+    var btn = document.getElementById('funding-save-btn');
+    btn.disabled = true;
+    runServer('recordFundingTransaction', token(), data).then(function (res) {
+      btn.disabled = false;
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      fundingModal.hide();
+      showToast('Funding recorded — confirm it once the transfer has cleared.', 'success');
+      fetchFunding();
+    }).catch(function (err) { btn.disabled = false; showToast(err.message, 'danger'); });
+  }
+
+  // ---------- Adjustments ----------
+  var adjustmentsCache = [];
+
+  function fetchAdjustments() {
+    runServer('getBalanceAdjustments', token(), { page: 1, pageSize: 1000, countryId: adjustmentsFilter.countryId }).then(function (res) {
+      var tbody = document.getElementById('adjustments-table-body');
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="6" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      adjustmentsCache = res.data.records;
+      if (!adjustmentsCache.length) { tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">No adjustments yet.</td></tr>'; return; }
+      tbody.innerHTML = adjustmentsCache.map(function (a) {
+        var badge = a.Status === 'Approved' ? 'badge-active' : (a.Status === 'Rejected' ? 'badge-inactive' : 'bg-warning text-dark');
+        var actions = (a.Status === 'Draft'
+          ? '<button class="btn btn-sm btn-light me-1" onclick="FinanceAccounts.approveAdjustment(\'' + a.AdjustmentID + '\')" title="Approve"><i class="bi bi-check-lg"></i></button>' +
+            '<button class="btn btn-sm btn-light text-danger me-1" onclick="FinanceAccounts.promptRejectAdjustment(\'' + a.AdjustmentID + '\')" title="Reject"><i class="bi bi-x-lg"></i></button>'
+          : '') +
+          (a.DocumentID ? '<button class="btn btn-sm btn-light" onclick="FinanceAccounts.viewDocument(\'' + a.DocumentID + '\')" title="View supporting document"><i class="bi bi-paperclip"></i></button>' : '');
+        return '<tr>' +
+          '<td>' + escapeHtml(a.Date) + '</td>' +
+          '<td>' + escapeHtml(a.AccountName || '') + '</td>' +
+          '<td>' + formatCurrency(a.Amount) + '</td>' +
+          '<td class="small">' + escapeHtml(a.Reason) + '</td>' +
+          '<td><span class="badge ' + badge + '">' + escapeHtml(a.Status) + '</span></td>' +
+          '<td class="text-end">' + actions + '</td>' +
+        '</tr>';
+      }).join('');
+    });
+  }
+
+  function openAddAdjustment() {
+    document.getElementById('adjustment-form').reset();
+    document.getElementById('adjustment-date').value = new Date().toISOString().slice(0, 10);
+    adjustmentDocUpload.reset();
+    adjustmentModal.show();
+  }
+
+  function handleSaveAdjustment(e) {
+    e.preventDefault();
+    var data = {
+      AccountID: document.getElementById('adjustment-accountid').value,
+      Date: document.getElementById('adjustment-date').value,
+      Amount: document.getElementById('adjustment-amount').value,
+      Reason: document.getElementById('adjustment-reason').value.trim(),
+      DocumentID: adjustmentDocUpload.getDocumentId()
+    };
+    var btn = document.getElementById('adjustment-save-btn');
+    btn.disabled = true;
+    runServer('createBalanceAdjustment', token(), data).then(function (res) {
+      btn.disabled = false;
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      adjustmentModal.hide();
+      showToast('Adjustment submitted — needs approval from another Admin.', 'success');
+      fetchAdjustments();
+    }).catch(function (err) { btn.disabled = false; showToast(err.message, 'danger'); });
+  }
+
+  // ---------- Reconciliation ----------
+  function fetchStatements() {
+    runServer('getBankStatements', token(), { page: 1, pageSize: 1000, countryId: reconciliationFilter.countryId }).then(function (res) {
+      var tbody = document.getElementById('statements-table-body');
+      if (!res.success) { tbody.innerHTML = '<tr><td colspan="7" class="text-danger text-center py-4">' + res.message + '</td></tr>'; return; }
+      statementsCache = res.data.records;
+      if (!statementsCache.length) { tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">No statements uploaded yet.</td></tr>'; return; }
+      tbody.innerHTML = statementsCache.map(function (s) {
+        var badge = s.Status === 'Reconciled' ? 'badge-active' : 'bg-warning text-dark';
+        return '<tr class="beneficiary-row" onclick="FinanceAccounts.openStatementDetail(\'' + s.StatementID + '\')">' +
+          '<td class="fw-medium">' + escapeHtml(s.AccountName || '') + '</td>' +
+          '<td>' + escapeHtml(s.StatementDate) + '</td>' +
+          '<td class="text-end">' + formatCurrencyIn(s.OpeningBalance, s.Currency) + '</td>' +
+          '<td class="text-end">' + formatCurrencyIn(s.ClosingBalance, s.Currency) + '</td>' +
+          '<td>' + s.TransactionCount + (s.UnmatchedCount ? ' <span class="text-muted small">(' + s.UnmatchedCount + ' unmatched)</span>' : '') + '</td>' +
+          '<td><span class="badge ' + badge + '">' + escapeHtml(s.Status) + '</span></td>' +
+          '<td class="text-end"><i class="bi bi-chevron-right text-muted"></i></td>' +
+        '</tr>';
+      }).join('');
+    });
+  }
+
+  function openUploadStatementModal() {
+    document.getElementById('statement-accountid').value = accountOptionsCache.length ? accountOptionsCache[0].id : '';
+    document.getElementById('statement-date').value = new Date().toISOString().slice(0, 10);
+    document.getElementById('statement-openingbalance').value = '';
+    document.getElementById('statement-closingbalance').value = '';
+    document.getElementById('statement-csv-input').value = '';
+    document.getElementById('statement-mapping-section').classList.add('d-none');
+    document.getElementById('btn-import-statement').classList.add('d-none');
+    document.getElementById('statement-mode-single').checked = true;
+    updateAmountModeVisibility();
+    statementDocUpload.reset();
+    rawStatementCsvText = '';
+    uploadStatementModal.show();
+  }
+
+  function updateAmountModeVisibility() {
+    var isDebitCredit = document.getElementById('statement-mode-debitcredit').checked;
+    document.getElementById('statement-single-amount-row').classList.toggle('d-none', isDebitCredit);
+    document.getElementById('statement-debitcredit-row').classList.toggle('d-none', !isDebitCredit);
+  }
+
+  function handleStatementFileSelected() {
+    var file = document.getElementById('statement-csv-input').files && document.getElementById('statement-csv-input').files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      rawStatementCsvText = String(reader.result);
+      runServer('previewBankStatementCsv', token(), rawStatementCsvText).then(function (res) {
+        if (!res.success) { showToast(res.message, 'danger'); return; }
+        renderStatementPreview(res.data);
+      }).catch(function (err) { showToast(err.message, 'danger'); });
+    };
+    reader.readAsText(file);
+  }
+
+  function renderStatementPreview(preview) {
+    var colOpts = preview.headers.map(function (h, i) { return '<option value="' + i + '">' + escapeHtml(h || 'Column ' + (i + 1)) + '</option>'; }).join('');
+    ['statement-col-date', 'statement-col-desc', 'statement-col-amount', 'statement-col-debit', 'statement-col-credit'].forEach(function (id) {
+      document.getElementById(id).innerHTML = colOpts;
+    });
+
+    var table = document.getElementById('statement-preview-table');
+    table.innerHTML = '<thead><tr>' + preview.headers.map(function (h) { return '<th>' + escapeHtml(h || '') + '</th>'; }).join('') + '</tr></thead>' +
+      '<tbody>' + preview.previewRows.map(function (row) {
+        return '<tr>' + row.map(function (cell) { return '<td class="small text-muted">' + escapeHtml(cell) + '</td>'; }).join('') + '</tr>';
+      }).join('') + '</tbody>';
+
+    document.getElementById('statement-rowcount').textContent = preview.totalDataRows + ' data row(s) found.';
+    document.getElementById('statement-mapping-section').classList.remove('d-none');
+    document.getElementById('btn-import-statement').classList.remove('d-none');
+  }
+
+  function handleImportStatement() {
+    var accountId = document.getElementById('statement-accountid').value;
+    var account = accountOptionsCache.filter(function (a) { return a.id === accountId; })[0];
+    var amountMode = document.getElementById('statement-mode-debitcredit').checked ? 'debitcredit' : 'single';
+
+    if (!rawStatementCsvText) { showToast('Choose a CSV file first.', 'danger'); return; }
+
+    var data = {
+      AccountID: accountId,
+      StatementDate: document.getElementById('statement-date').value,
+      OpeningBalance: document.getElementById('statement-openingbalance').value,
+      ClosingBalance: document.getElementById('statement-closingbalance').value,
+      Currency: account ? account.currency : '',
+      FileDocumentID: statementDocUpload.getDocumentId(),
+      csvText: rawStatementCsvText,
+      dateCol: Number(document.getElementById('statement-col-date').value),
+      descCol: Number(document.getElementById('statement-col-desc').value),
+      amountMode: amountMode
+    };
+    if (amountMode === 'debitcredit') {
+      data.debitCol = Number(document.getElementById('statement-col-debit').value);
+      data.creditCol = Number(document.getElementById('statement-col-credit').value);
+    } else {
+      data.amountCol = Number(document.getElementById('statement-col-amount').value);
+    }
+
+    var btn = document.getElementById('btn-import-statement');
+    btn.disabled = true;
+    runServer('importBankStatement', token(), data).then(function (res) {
+      btn.disabled = false;
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      uploadStatementModal.hide();
+      showToast(res.data.imported + ' transaction(s) imported.', 'success');
+      fetchStatements();
+    }).catch(function (err) { btn.disabled = false; showToast(err.message, 'danger'); });
+  }
+
+  function openStatementDetail(statementId) {
+    currentStatementId = statementId;
+    var statement = statementsCache.filter(function (s) { return s.StatementID === statementId; })[0];
+    if (!statement) return;
+    currentStatementAccountId = statement.AccountID;
+    currentStatementCurrency = statement.Currency;
+
+    document.getElementById('statementDetailTitle').textContent = (statement.AccountName || '') + ' — ' + statement.StatementDate;
+    document.getElementById('statement-reconciliation-panel').innerHTML = '<p class="text-muted text-center py-3">Loading…</p>';
+    document.getElementById('statement-transactions-body').innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">Loading…</td></tr>';
+    statementDetailModal.show();
+
+    refreshStatementDetail();
+  }
+
+  function refreshStatementDetail() {
+    // Sequential, not Promise.all — see the comment on the same pattern
+    // in initFinanceAccountsPage() above.
+    var previewRes, txRes;
+    runServer('previewReconciliation', token(), currentStatementId).then(function (res) {
+      previewRes = res;
+      return runServer('getBankTransactions', token(), currentStatementId);
+    }).then(function (res) {
+      txRes = res;
+      return runServer('getReconciliations', token(), { statementId: currentStatementId, page: 1, pageSize: 5 });
+    }).then(function (reconRes) {
+      if (previewRes.success) renderReconciliationPanel(previewRes.data, reconRes.success ? reconRes.data.records : []);
+      if (txRes.success) renderStatementTransactions(txRes.data);
+    });
+  }
+
+  function renderReconciliationPanel(preview, reconciliations) {
+    var diff = preview.difference;
+    var isBalanced = Math.abs(diff) < 0.01;
+    var latestOpen = reconciliations.filter(function (r) { return r.Status === 'Open'; })[0];
+
+    var html = '<div class="p-3">' +
+      '<div class="mini-stat-grid">' +
+        '<div class="mini-stat-card"><i class="bi bi-cpu mini-stat-icon"></i><div class="mini-stat-value">' + formatCurrencyIn(preview.systemBalance, preview.currency) + '</div><div class="mini-stat-label">System Balance (current)</div></div>' +
+        '<div class="mini-stat-card"><i class="bi bi-bank mini-stat-icon"></i><div class="mini-stat-value">' + formatCurrencyIn(preview.statementBalance, preview.currency) + '</div><div class="mini-stat-label">Statement Closing Balance</div></div>' +
+        '<div class="mini-stat-card"><i class="bi ' + (isBalanced ? 'bi-check-circle text-success' : 'bi-exclamation-triangle text-danger') + ' mini-stat-icon"></i><div class="mini-stat-value ' + (isBalanced ? 'text-success' : 'text-danger') + '">' + formatCurrencyIn(diff, preview.currency) + '</div><div class="mini-stat-label">Difference</div></div>' +
+      '</div>' +
+      '<div class="mt-2 d-flex gap-2 align-items-center flex-wrap">' +
+        '<button class="btn btn-sm btn-primary" onclick="FinanceAccounts.recordReconciliation()">Record Reconciliation Snapshot</button>' +
+        (latestOpen ? '<button class="btn btn-sm btn-outline-danger" onclick="FinanceAccounts.promptResolveReconciliation(\'' + latestOpen.ReconciliationID + '\')">Resolve Open Mismatch</button>' : '') +
+      '</div>' +
+      (reconciliations.length ? '<div class="mt-3 small text-muted">Last recorded: ' + escapeHtml(formatDateDisplay(String(reconciliations[0].ReconciledAt).slice(0, 10))) + ' — <span class="' + (reconciliations[0].Status === 'Resolved' ? 'text-success' : 'text-danger') + '">' + escapeHtml(reconciliations[0].Status) + '</span></div>' : '') +
+    '</div>';
+
+    document.getElementById('statement-reconciliation-panel').innerHTML = html;
+  }
+
+  function renderStatementTransactions(records) {
+    var tbody = document.getElementById('statement-transactions-body');
+    if (!records.length) { tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">No transactions on this statement.</td></tr>'; return; }
+    tbody.innerHTML = records.map(function (t) {
+      var matchBadge = t.MatchStatus === 'Matched' ? 'badge-active' : (t.MatchStatus === 'Ignored' ? 'badge-inactive' : 'bg-warning text-dark');
+      var matchLabel = t.MatchStatus === 'Matched' ? (t.MatchedTable + ' ' + t.MatchedRecordID) : t.MatchStatus;
+      var actions = t.MatchStatus === 'Unmatched'
+        ? '<button class="btn btn-sm btn-light me-1" onclick="FinanceAccounts.openMatchPicker(\'' + t.BankTransactionID + '\', ' + Number(t.Amount) + ')" title="Match"><i class="bi bi-link-45deg"></i></button>' +
+          '<button class="btn btn-sm btn-light" onclick="FinanceAccounts.ignoreTransaction(\'' + t.BankTransactionID + '\')" title="Ignore"><i class="bi bi-eye-slash"></i></button>'
+        : '<button class="btn btn-sm btn-light" onclick="FinanceAccounts.unmatchTransaction(\'' + t.BankTransactionID + '\')" title="Undo"><i class="bi bi-arrow-counterclockwise"></i></button>';
+      return '<tr>' +
+        '<td>' + escapeHtml(t.Date) + '</td>' +
+        '<td class="small">' + escapeHtml(t.Description) + '</td>' +
+        '<td class="text-end ' + (Number(t.Amount) >= 0 ? 'text-success' : 'text-danger') + '">' + formatCurrencyIn(t.Amount, currentStatementCurrency) + '</td>' +
+        '<td><span class="badge ' + matchBadge + '">' + escapeHtml(matchLabel) + '</span></td>' +
+        '<td class="text-end">' + actions + '</td>' +
+      '</tr>';
+    }).join('');
+  }
+
+  function handleAutoMatch() {
+    if (!currentStatementId) return;
+    runServer('autoMatchBankTransactions', token(), currentStatementId).then(function (res) {
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast(res.data.matched + ' transaction(s) auto-matched.', 'success');
+      refreshStatementDetail();
+      fetchStatements();
+    });
+  }
+
+  function openMatchPicker(bankTransactionId, amount) {
+    pendingMatchTransactionId = bankTransactionId;
+    var direction = amount >= 0 ? 'inflow' : 'outflow';
+    var el = document.getElementById('match-candidates-list');
+    el.innerHTML = '<p class="text-muted text-center py-4">Loading…</p>';
+    matchCandidateModal.show();
+
+    runServer('getMatchCandidates', token(), currentStatementAccountId, direction).then(function (res) {
+      if (!res.success) { el.innerHTML = '<p class="text-danger text-center py-4">' + res.message + '</p>'; return; }
+      if (!res.data.length) { el.innerHTML = '<p class="text-muted text-center py-4">No unmatched records available on this account.</p>'; return; }
+      el.innerHTML = res.data.map(function (c) {
+        return '<div class="card-surface p-2 mb-1" style="cursor:pointer" onclick="FinanceAccounts.confirmMatch(\'' + c.table + '\', \'' + c.id + '\')">' +
+          '<div class="d-flex justify-content-between"><span class="fw-medium">' + escapeHtml(c.label) + '</span><span>' + formatCurrencyIn(c.amount, currentStatementCurrency) + '</span></div>' +
+          '<div class="small text-muted">' + escapeHtml(c.table) + '</div>' +
+        '</div>';
+      }).join('');
+    });
+  }
+
+  function handleConfirmResolveReconciliation() {
+    if (!pendingResolveReconciliationId) return;
+    var notes = document.getElementById('resolve-reconciliation-notes').value.trim();
+    if (!notes) { showToast('Notes are required.', 'danger'); return; }
+    runServer('resolveReconciliation', token(), pendingResolveReconciliationId, notes).then(function (res) {
+      resolveReconciliationModal.hide();
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Reconciliation resolved.', 'success');
+      refreshStatementDetail();
+      fetchStatements();
+    });
+  }
+
+  // ---------- Shared reason modal (cancel funding / reject adjustment) ----------
+  function handleConfirmReason() {
+    if (!pendingReason) return;
+    var reason = document.getElementById('finance-reason-text').value.trim();
+    if (!reason) { showToast('A reason is required.', 'danger'); return; }
+
+    var call = pendingReason.kind === 'cancelfunding'
+      ? runServer('cancelFundingTransaction', token(), pendingReason.id, reason)
+      : runServer('rejectBalanceAdjustment', token(), pendingReason.id, reason);
+
+    call.then(function (res) {
+      reasonModal.hide();
+      if (!res.success) { showToast(res.message, 'danger'); return; }
+      showToast('Done.', 'success');
+      if (pendingReason.kind === 'cancelfunding') fetchFunding();
+      else fetchAdjustments();
+    });
+  }
+
+  // ---------- Exposed to inline onclick handlers ----------
+  window.FinanceAccounts = {
+    editAccount: openEditAccount,
+    confirmFunding: function (id) {
+      runServer('confirmFundingTransaction', token(), id).then(function (res) {
+        if (!res.success) { showToast(res.message, 'danger'); return; }
+        showToast('Funding confirmed.', 'success');
+        fetchFunding();
+      });
+    },
+    promptCancelFunding: function (id) {
+      pendingReason = { kind: 'cancelfunding', id: id };
+      document.getElementById('financeReasonModalLabel').textContent = 'Cancel Funding Entry';
+      document.getElementById('finance-reason-text').value = '';
+      reasonModal.show();
+    },
+    approveAdjustment: function (id) {
+      runServer('approveBalanceAdjustment', token(), id).then(function (res) {
+        if (!res.success) { showToast(res.message, 'danger'); return; }
+        showToast('Adjustment approved.', 'success');
+        fetchAdjustments();
+      });
+    },
+    promptRejectAdjustment: function (id) {
+      pendingReason = { kind: 'rejectadjustment', id: id };
+      document.getElementById('financeReasonModalLabel').textContent = 'Reject Adjustment';
+      document.getElementById('finance-reason-text').value = '';
+      reasonModal.show();
+    },
+    viewDocument: function (documentId) { viewFinancialDocument(documentId); },
+    openStatementDetail: openStatementDetail,
+    openMatchPicker: openMatchPicker,
+    ignoreTransaction: function (bankTransactionId) {
+      runServer('ignoreBankTransaction', token(), bankTransactionId).then(function (res) {
+        if (!res.success) { showToast(res.message, 'danger'); return; }
+        showToast('Marked as ignored.', 'success');
+        refreshStatementDetail();
+      });
+    },
+    unmatchTransaction: function (bankTransactionId) {
+      runServer('unmatchBankTransaction', token(), bankTransactionId).then(function (res) {
+        if (!res.success) { showToast(res.message, 'danger'); return; }
+        refreshStatementDetail();
+      });
+    },
+    confirmMatch: function (table, recordId) {
+      if (!pendingMatchTransactionId) return;
+      runServer('manualMatchBankTransaction', token(), pendingMatchTransactionId, table, recordId).then(function (res) {
+        matchCandidateModal.hide();
+        if (!res.success) { showToast(res.message, 'danger'); return; }
+        showToast('Matched.', 'success');
+        refreshStatementDetail();
+      });
+    },
+    recordReconciliation: function () {
+      if (!currentStatementId) return;
+      runServer('createReconciliation', token(), currentStatementId, '').then(function (res) {
+        if (!res.success) { showToast(res.message, 'danger'); return; }
+        showToast(res.data.Status === 'Resolved' ? 'Balances match — reconciliation recorded.' : 'Difference recorded — investigate and resolve when ready.', res.data.Status === 'Resolved' ? 'success' : 'warning');
+        refreshStatementDetail();
+        fetchStatements();
+      });
+    },
+    promptResolveReconciliation: function (reconciliationId) {
+      pendingResolveReconciliationId = reconciliationId;
+      document.getElementById('resolve-reconciliation-notes').value = '';
+      resolveReconciliationModal.show();
+    }
+  };
+})();
+</script>

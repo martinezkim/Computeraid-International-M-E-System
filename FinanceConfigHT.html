@@ -1,0 +1,197 @@
+<div class="page-header">
+  <div>
+    <h4>Finance Settings</h4>
+    <p>Expense/income categories and project staff used across the Finance module</p>
+  </div>
+</div>
+
+<div class="pill-tabs animate-float-up">
+  <button type="button" class="pill-tab active" data-tab="categories">Categories</button>
+  <button type="button" class="pill-tab" data-tab="staff">Staff</button>
+  <button type="button" class="pill-tab" data-tab="exchangerates">Exchange Rates</button>
+</div>
+
+<!-- Categories -->
+<div class="card-surface usage-config-pane" id="pane-categories">
+  <div class="toolbar mb-3">
+    <h6 class="mb-0 flex-grow-1">Expense &amp; Income Categories</h6>
+    <button class="btn btn-primary btn-sm" id="btn-add-category"><i class="bi bi-plus-lg"></i> Add Category</button>
+  </div>
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Name</th><th>Type</th><th>Status</th><th class="text-end">Actions</th></tr></thead>
+      <tbody id="categories-table-body"><tr><td colspan="4" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Staff -->
+<div class="card-surface usage-config-pane d-none" id="pane-staff">
+  <div class="toolbar mb-3">
+    <h6 class="mb-0 flex-grow-1">Project Staff</h6>
+    <button class="btn btn-primary btn-sm" id="btn-add-staff"><i class="bi bi-plus-lg"></i> Add Staff</button>
+  </div>
+  <p class="text-muted small">Who Salaries and Reimbursements are paid to — not a login account. Individual salary amounts stay Admin-only; Hub Managers only ever see aggregated staff costs.</p>
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Name</th><th>Staff #</th><th>Role</th><th>Hub</th><th>Status</th><th class="text-end">Actions</th></tr></thead>
+      <tbody id="staff-table-body"><tr><td colspan="6" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Exchange Rates -->
+<div class="card-surface usage-config-pane d-none" id="pane-exchangerates">
+  <div class="toolbar mb-3">
+    <h6 class="mb-0 flex-grow-1">Exchange Rates</h6>
+    <button class="btn btn-primary btn-sm" id="btn-add-exchangerate"><i class="bi bi-plus-lg"></i> Log Rate</button>
+  </div>
+  <p class="text-muted small">Manually-entered rates used ONLY for an optional combined view on the Financial Dashboard — every native, per-currency figure everywhere else in Finance is unaffected. A currency with no rate logged is simply excluded from that combined total. Logging a new rate never overwrites an old one — history is kept.</p>
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead><tr><th>Currency</th><th class="text-end">Rate</th><th>1 Unit =</th><th>Rate Date</th><th>Source</th><th>Logged By</th></tr></thead>
+      <tbody id="exchangerates-table-body"><tr><td colspan="6" class="text-center text-muted py-4">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Category Modal -->
+<div class="modal fade" id="financeCategoryModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="financecategory-form" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title" id="financeCategoryModalLabel">Add Category</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="financecategory-id">
+          <div class="mb-3">
+            <label class="form-label">Name</label>
+            <input type="text" class="form-control" id="financecategory-name" required maxlength="100" placeholder="e.g. Transport">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Type</label>
+            <select class="form-select" id="financecategory-type" required>
+              <option value="Expense">Expense</option>
+              <option value="Income">Income</option>
+            </select>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" id="financecategory-active" checked>
+            <label class="form-check-label" for="financecategory-active">Active</label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="financecategory-save-btn">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Staff Modal -->
+<div class="modal fade" id="financeStaffModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="financestaff-form" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title" id="financeStaffModalLabel">Add Staff</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="financestaff-id">
+          <div class="mb-3">
+            <label class="form-label">Full Name</label>
+            <input type="text" class="form-control" id="financestaff-fullname" required maxlength="100">
+          </div>
+          <div class="row">
+            <div class="col mb-3">
+              <label class="form-label">Staff Number <span class="text-muted">(optional)</span></label>
+              <input type="text" class="form-control" id="financestaff-staffnumber" maxlength="30">
+            </div>
+            <div class="col mb-3">
+              <label class="form-label">Role / Title <span class="text-muted">(optional)</span></label>
+              <input type="text" class="form-control" id="financestaff-roletitle" maxlength="60">
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Hub</label>
+            <select class="form-select" id="financestaff-hubid" required></select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Email <span class="text-muted">(optional, notifications only — not a login)</span></label>
+            <input type="email" class="form-control" id="financestaff-email">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Status</label>
+            <select class="form-select" id="financestaff-status">
+              <option value="Active">Active</option>
+              <option value="Inactive">Inactive</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="financestaff-save-btn">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Exchange Rate Modal -->
+<div class="modal fade" id="exchangeRateModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form id="exchangerate-form" novalidate>
+        <div class="modal-header">
+          <h5 class="modal-title">Log Exchange Rate</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label">Currency</label>
+            <select class="form-select" id="exchangerate-currencycode" required></select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Rate <span class="text-muted" id="exchangerate-rate-hint">(1 unit of this currency = ? system currency)</span></label>
+            <input type="number" class="form-control" id="exchangerate-rate" min="0" step="0.0001" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Rate Date</label>
+            <input type="date" class="form-control" id="exchangerate-ratedate" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Source <span class="text-muted">(optional)</span></label>
+            <input type="text" class="form-control" id="exchangerate-source" maxlength="100" placeholder="e.g. Central Bank of Kenya, XE.com">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="exchangerate-save-btn">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Delete Confirmation Modal (shared) -->
+<div class="modal fade" id="financeConfigDeleteModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Delete</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        Are you sure you want to delete <strong id="delete-financeconfig-name"></strong>? This cannot be undone.
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-danger" id="confirm-delete-financeconfig">Delete</button>
+      </div>
+    </div>
+  </div>
+</div>
