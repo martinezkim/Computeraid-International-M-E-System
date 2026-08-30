@@ -121,7 +121,7 @@ function endSession(sessionToken, sessionId) {
  * Activities check-in) are left untouched — closing those stays
  * whoever created them's own responsibility.
  */
-function closeAutoVisitIfSessionsDone_(visitId, logoutIso) {
+function closeAutoVisitIfSessionsDone_(visitId, logoutIso, estimated) {
   if (!visitId) return;
   var visit = DB.getById(BENEFICIARY_VISITS_TABLE, visitId);
   if (!visit || visit.DepartureTime || visit.Purpose !== 'Computer use (auto-created from session)') return;
@@ -136,8 +136,76 @@ function closeAutoVisitIfSessionsDone_(visitId, logoutIso) {
   DB.update(BENEFICIARY_VISITS_TABLE, visitId, {
     DepartureTime: departureTime,
     DurationMinutes: duration.error ? '' : duration.minutes,
-    DepartureEstimated: false
+    DepartureEstimated: !!estimated
   });
+}
+
+/**
+ * ============================================================
+ * STALE SESSION SAFETY NET
+ * ============================================================
+ * Nothing about a lab computer sleeping, its screen locking, or a
+ * kiosk browser tab crashing/losing power ever fires a client-side
+ * "end session" call — without this, a forgotten session sits Open
+ * forever (seen live: one stuck open for 3 days), silently corrupting
+ * every utilization figure that assumes an Open session means someone
+ * is using that computer RIGHT NOW. Run on a schedule (see
+ * installComputerSessionAutoCloseTrigger_ below — install it once)
+ * rather than triggered by any user action, since by definition
+ * nothing the user does will ever call this for them.
+ *
+ * Marked DurationEstimated/DepartureEstimated: true — the fields exist
+ * exactly for this — so a real, precisely-logged duration is never
+ * confused with one inferred from "it had been open a suspiciously
+ * long time."
+ */
+var COMPUTER_SESSION_STALE_HOURS = 4; // Open longer than this with no logout = assume abandoned
+
+function autoCloseStaleComputerSessions_() {
+  var cutoff = new Date(Date.now() - COMPUTER_SESSION_STALE_HOURS * 60 * 60 * 1000);
+  var now = new Date();
+  var nowIso = now.toISOString();
+  var closedCount = 0;
+
+  DB.getAll(COMPUTER_SESSIONS_TABLE).filter(function (s) { return s.Status === 'Open'; }).forEach(function (existing) {
+    var loginDate = new Date(existing.LoginTime);
+    if (isNaN(loginDate.getTime()) || loginDate > cutoff) return; // not stale yet, or an unparseable LoginTime — skip either way
+
+    var minutes = Math.round((now.getTime() - loginDate.getTime()) / 60000);
+    DB.update(COMPUTER_SESSIONS_TABLE, existing.SessionID, {
+      LogoutTime: nowIso,
+      DurationMinutes: minutes,
+      DurationEstimated: true,
+      Status: 'Closed',
+      ServerReceivedAt: nowIso,
+      NormalizedTime: nowIso
+    });
+    updateComputerLastActive_(existing.ComputerID);
+    closeAutoVisitIfSessionsDone_(existing.VisitID, nowIso, true);
+    logAudit_({ email: 'system', role: 'System' }, 'AutoClose', COMPUTER_SESSIONS_TABLE, existing.SessionID,
+      'Status', 'Open', 'Closed (stale — open ' + minutes + ' min with no logout)', existing.HubID);
+    closedCount++;
+  });
+
+  return closedCount;
+}
+
+/**
+ * ONE-TIME SETUP — run once from the Apps Script editor (Run menu),
+ * the same way createInitialAdmin() is run once. Installs the hourly
+ * trigger that actually calls autoCloseStaleComputerSessions_ — the
+ * function existing in code does nothing on its own until a trigger
+ * is installed to call it. Safe to run again if unsure it's already
+ * installed EXCEPT that doing so creates a second, duplicate hourly
+ * trigger — check Triggers (clock icon, left sidebar of the editor)
+ * first if in doubt, and delete the extra one if you find two.
+ */
+function installComputerSessionAutoCloseTrigger_() {
+  ScriptApp.newTrigger('autoCloseStaleComputerSessions_')
+    .timeBased()
+    .everyHours(1)
+    .create();
+  return 'Installed — autoCloseStaleComputerSessions_ will now run hourly.';
 }
 
 /**

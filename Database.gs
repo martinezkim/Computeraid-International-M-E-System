@@ -132,24 +132,33 @@ var DB = {
    * 'HH:mm' instead, so every time-only field is correct on read without
    * each module needing its own workaround.
    *
-   * Both the detection and the formatting use UTC, not the script's
-   * timezone — a Sheets time-of-day serial is a timezone-agnostic
-   * fraction of a day (09:00 is always exactly 0.375, everywhere), and
-   * Apps Script represents it as that many hours past the 1899-12-30
-   * epoch in UTC. Formatting it with a real-world timezone applies that
-   * zone's offset — and since the epoch date is literally 1899, that
-   * pulls in the zone's pre-standardization historical offset (often an
-   * odd fractional value, not today's clean +3:00 etc.), silently
-   * shifting the displayed time. UTC sidesteps that entirely.
+   * CORRECTED (was wrong — caused a live bug, see below): both branches
+   * use the script's real timezone, not UTC. `Range.getValue()` on a
+   * date/time-formatted cell builds the Date using the SPREADSHEET's own
+   * bound timezone (which should match Session.getScriptTimeZone() —
+   * Africa/Nairobi here), not plain UTC — so a value typed as "09:33"
+   * gets anchored as 1899-12-30 09:33 Nairobi time, whose UTC instant is
+   * 06:33Z. The previous version formatted that instant with 'Etc/UTC',
+   * which just reads the UTC components straight off (06:33) — silently
+   * re-applying the timezone offset a second time and shifting every
+   * time-only field back by the zone's offset (confirmed live: a Hub
+   * Visit's ArrivalTime consistently displayed exactly 3 hours early).
+   * Formatting with the script's timezone instead cancels that offset
+   * out correctly, the same way the date-only branch already did (which
+   * is exactly why DATE fields were never seen to have this bug).
    */
   _rowToObject: function (schema, row, rowIndex) {
     var obj = { _rowIndex: rowIndex };
     for (var c = 0; c < schema.columns.length; c++) {
       var value = row[c];
       if (value instanceof Date) {
-        var isTimeOnly = value.getUTCFullYear() === 1899 && value.getUTCMonth() === 11 && value.getUTCDate() === 30;
+        // Dec 29 as well as Dec 30 — a time near midnight local can roll
+        // the Date's UTC representation back a calendar day once anchored
+        // to the script's (positive UTC-offset) timezone; both are really
+        // still "1899-12-30 in the script's own timezone".
+        var isTimeOnly = value.getUTCFullYear() === 1899 && value.getUTCMonth() === 11 && (value.getUTCDate() === 30 || value.getUTCDate() === 29);
         value = isTimeOnly
-          ? Utilities.formatDate(value, 'Etc/UTC', 'HH:mm')
+          ? Utilities.formatDate(value, Session.getScriptTimeZone(), 'HH:mm')
           : Utilities.formatDate(value, Session.getScriptTimeZone(), 'yyyy-MM-dd');
       }
       obj[schema.columns[c]] = value;
