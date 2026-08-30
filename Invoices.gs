@@ -419,7 +419,7 @@ function validateInvoiceInput(data, identity) {
   return assertNotSalaryCategory_(data && data.ExpenseCategory);
 }
 
-/** Normalizes client line items to [{description, unitCost, qtyRate, amount}], dropping fully-empty rows. */
+/** Normalizes client line items to [{description, unitCost, qtyRate, days, amount}], dropping fully-empty rows. `days` is 0/omitted for a stipend line — see isStipendInvoice_ — a stipend isn't priced per day. */
 function parseInvoiceLineItems_(data) {
   var items = data && data.LineItems;
   if (typeof items === 'string') {
@@ -431,6 +431,7 @@ function parseInvoiceLineItems_(data) {
       description: String((it && it.description) || '').trim(),
       unitCost: Number(it && it.unitCost) || 0,
       qtyRate: Number(it && it.qtyRate) || 0,
+      days: Number(it && it.days) || 0,
       amount: Number(it && it.amount) || 0
     };
   }).filter(function (it) { return it.description !== '' || it.amount !== 0; });
@@ -535,22 +536,37 @@ function escInvoiceHtml_(s) {
   });
 }
 
-/** Builds the branded invoice HTML (Computer Aid yellow #FECA38), matching the approved mockup layout. */
+/**
+ * Builds the branded invoice HTML (Computer Aid yellow #FECA38 + navy
+ * #1B2560), matching the Computeraid Kenya invoice reference. Table-
+ * based layout only — the Apps Script HTML->PDF converter does not
+ * reliably support flexbox, margin:auto, or embedded SVG, so the
+ * wordmark below is styled text rather than the app's vector logo
+ * (Logo.html) — safer for this specific rendering pipeline.
+ *
+ * The DAYS column only appears for a non-stipend invoice — see
+ * isStipendInvoice_ — a stipend line isn't priced per day, so
+ * parseInvoiceLineItems_ leaves `days` at 0 for those and this never
+ * shows a meaningless "0" in that column.
+ */
 function buildInvoiceHtml_(invoice, sender, bank) {
   var YELLOW = '#FECA38';
+  var NAVY = '#1B2560';
   var lineItems;
   try { lineItems = JSON.parse(invoice.LineItemsJSON || '[]'); } catch (e) { lineItems = []; }
-  while (lineItems.length < 4) lineItems.push({ description: '', unitCost: 0, qtyRate: 0, amount: 0 }); // pad to a few blank rows like the mockup
 
-  var cur = escInvoiceHtml_(invoice.Currency || '');
+  var showDays = !isStipendInvoice_(invoice);
   var org = APP_CONFIG.ORG_BILLING;
+  var cur = escInvoiceHtml_(invoice.Currency || '');
 
   var rowsHtml = lineItems.map(function (it, idx) {
     var shade = idx % 2 === 0 ? '#ffffff' : '#f4f4f4';
     return '<tr style="background:' + shade + ';">' +
+      '<td style="padding:10px 12px;color:#333;font-weight:700;vertical-align:top;">' + (idx + 1) + '.</td>' +
       '<td style="padding:10px 12px;color:#333;">' + escInvoiceHtml_(it.description) + '</td>' +
       '<td style="padding:10px 12px;text-align:right;color:#333;">' + (it.unitCost ? fmtInvoiceMoney_(it.unitCost) : '') + '</td>' +
       '<td style="padding:10px 12px;text-align:right;color:#333;">' + (it.qtyRate ? fmtInvoiceMoney_(it.qtyRate) : '') + '</td>' +
+      (showDays ? '<td style="padding:10px 12px;text-align:right;color:#333;">' + (it.days ? fmtInvoiceMoney_(it.days) : '') + '</td>' : '') +
       '<td style="padding:10px 12px;text-align:right;color:#333;">' + (it.amount ? fmtInvoiceMoney_(it.amount) : '') + '</td>' +
     '</tr>';
   }).join('');
@@ -566,8 +582,8 @@ function buildInvoiceHtml_(invoice, sender, bank) {
     if (bank.branchCode) termsRows.push('Branch code: ' + bank.branchCode);
   }
   var termsHtml = termsRows.length
-    ? '<div style="margin-top:60px;"><div style="color:#333;font-weight:600;">TERMS</div>' +
-      termsRows.map(function (r) { return '<div style="color:#333;font-size:13px;">' + escInvoiceHtml_(r) + '</div>'; }).join('') + '</div>'
+    ? '<div style="margin-top:40px;"><div style="color:' + NAVY + ';font-weight:700;">TERMS</div>' +
+      termsRows.map(function (r) { return '<div style="color:' + NAVY + ';font-size:13px;">' + escInvoiceHtml_(r) + '</div>'; }).join('') + '</div>'
     : '';
 
   var totalsRow = function (label, value, opts) {
@@ -577,58 +593,79 @@ function buildInvoiceHtml_(invoice, sender, bank) {
       '<td style="padding:4px 0 4px 12px;text-align:right;color:' + (opts.strong ? '#111' : '#333') + ';font-weight:' + (opts.strong ? '700' : '600') + ';white-space:nowrap;">' + value + '</td>' +
     '</tr>';
   };
+  // A real discount/tax is shown itemized when actually used; otherwise
+  // the reference format's just a single, clean TOTAL line with nothing
+  // to break down.
+  var hasDiscountOrTax = (Number(invoice.Discount) || 0) > 0 || (Number(invoice.TaxRate) || 0) > 0;
+  var breakdownHtml = hasDiscountOrTax
+    ? '<table width="100%" style="margin-top:10px;border-collapse:collapse;"><tr>' +
+        '<td width="60%"></td>' +
+        '<td width="40%">' +
+          '<table width="100%" style="border-collapse:collapse;font-size:12px;">' +
+            totalsRow('SUBTOTAL', fmtInvoiceMoney_(invoice.Amount)) +
+            totalsRow('DISCOUNT', fmtInvoiceMoney_(invoice.Discount)) +
+            totalsRow('(TAX RATE)', fmtInvoiceMoney_(invoice.TaxRate)) +
+            totalsRow('TAX', fmtInvoiceMoney_(invoice.TaxAmount)) +
+          '</table>' +
+        '</td>' +
+      '</tr></table>'
+    : '';
 
   // NOTE: table-based layout only — the Apps Script HTML->PDF converter
   // does not reliably support flexbox or margin:auto, so alignment is
   // done with tables, width %, align attributes and text-align.
   return '' +
   '<html><head><meta charset="utf-8"><style>body{font-family:Arial,Helvetica,sans-serif;margin:0;color:#333;}</style></head><body>' +
-  '<div style="height:26px;background:' + YELLOW + ';"></div>' +
-  '<div style="padding:24px 40px;">' +
-    '<div style="text-align:right;font-weight:700;color:#111;">' + escInvoiceHtml_(fmtInvoiceDate_(invoice.InvoiceDate)) + '</div>' +
-    '<div style="margin-top:18px;">' +
-      '<div style="font-size:20px;font-weight:700;color:#222;">' + escInvoiceHtml_(sender.name) + '</div>' +
-      '<div style="font-size:13px;color:#444;margin-top:4px;">' + escInvoiceHtml_(sender.title) +
-        (sender.phone ? '&nbsp;&nbsp;&nbsp;&nbsp;' + escInvoiceHtml_(sender.phone) : '') + '</div>' +
-      '<div style="font-size:13px;color:#444;">' + escInvoiceHtml_(sender.address) +
-        (sender.email ? '&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#2a6fb0;">' + escInvoiceHtml_(sender.email) + '</span>' : '') + '</div>' +
-    '</div>' +
+  '<div style="padding:32px 40px;">' +
 
-    '<div style="margin-top:26px;font-size:11px;color:#999;font-weight:700;letter-spacing:.08em;">BILLED TO</div>' +
-    '<div style="font-size:13px;color:#333;">' + escInvoiceHtml_(org.name) + ',<br>' + org.addressLines.map(escInvoiceHtml_).join('<br>') + '</div>' +
+    '<table width="100%" style="border-collapse:collapse;"><tr>' +
+      '<td valign="top" width="60%">' +
+        '<div style="font-size:26px;font-weight:800;letter-spacing:-.5px;">' +
+          '<span style="color:' + NAVY + ';">Computer</span><span style="color:' + YELLOW + ';">Aid</span>' +
+        '</div>' +
+      '</td>' +
+      '<td valign="top" width="40%" style="text-align:right;font-weight:700;color:' + NAVY + ';">' + escInvoiceHtml_(fmtInvoiceDate_(invoice.InvoiceDate).toUpperCase()) + '</td>' +
+    '</tr></table>' +
 
-    '<div style="text-align:right;font-weight:600;color:#222;margin-top:8px;">Invoice #' + escInvoiceHtml_(invoice.InvoiceNumber || invoice.InvoiceID) + '</div>' +
+    '<table width="100%" style="border-collapse:collapse;margin-top:14px;"><tr>' +
+      '<td valign="top" width="55%">' +
+        '<div style="font-size:15px;color:' + NAVY + ';margin-top:4px;">' + escInvoiceHtml_(sender.name) + '</div>' +
+        '<div style="font-size:15px;color:' + NAVY + ';margin-top:4px;">' + escInvoiceHtml_(org.name) + '</div>' +
+        '<div style="font-size:15px;color:' + NAVY + ';margin-top:4px;">' + escInvoiceHtml_(sender.title) + '</div>' +
+      '</td>' +
+      '<td valign="top" width="45%">' +
+        '<table width="100%" style="border-collapse:collapse;background:' + YELLOW + ';">' +
+          '<tr><td style="padding:16px 18px 2px 18px;font-size:34px;font-weight:800;font-style:italic;color:#111;">INVOICE</td></tr>' +
+          '<tr><td style="padding:0 18px 16px 18px;font-size:20px;color:#111;">#' + escInvoiceHtml_(invoice.InvoiceNumber || invoice.InvoiceID) + '</td></tr>' +
+        '</table>' +
+      '</td>' +
+    '</tr></table>' +
+
+    '<div style="margin-top:24px;font-size:18px;font-weight:800;color:' + NAVY + ';">BILLED TO</div>' +
+    '<div style="font-size:14px;color:' + NAVY + ';margin-top:6px;">' + escInvoiceHtml_(org.name) + ',<br>' + org.addressLines.map(escInvoiceHtml_).join('<br>') + '</div>' +
+
+    '<table width="100%" style="margin-top:24px;border-collapse:collapse;font-size:12px;">' +
+      '<thead><tr style="background:' + YELLOW + ';color:#fff;">' +
+        '<th align="left" style="padding:10px 12px;">S/N</th>' +
+        '<th align="left" style="padding:10px 12px;">ITEM</th>' +
+        '<th align="right" style="padding:10px 12px;">UNIT COST(' + cur + ')</th>' +
+        '<th align="right" style="padding:10px 12px;">QUANTITY</th>' +
+        (showDays ? '<th align="right" style="padding:10px 12px;">DAYS</th>' : '') +
+        '<th align="right" style="padding:10px 12px;">SUB TOTAL(' + cur + ')</th>' +
+      '</tr></thead><tbody>' + rowsHtml + '</tbody>' +
+    '</table>' +
+
+    breakdownHtml +
 
     '<table width="100%" style="margin-top:6px;border-collapse:collapse;"><tr>' +
-      '<td valign="bottom" width="32%" style="font-size:36px;color:#555;font-weight:400;">Invoice</td>' +
-      '<td width="68%">' +
-        '<table width="100%" style="border-collapse:collapse;font-size:12px;">' +
-          '<thead><tr style="background:' + YELLOW + ';color:#fff;">' +
-            '<th align="left" style="padding:10px 12px;">DESCRIPTION</th>' +
-            '<th align="right" style="padding:10px 12px;">UNIT COST</th>' +
-            '<th align="right" style="padding:10px 12px;">QTY/DAY RATE</th>' +
-            '<th align="right" style="padding:10px 12px;">AMOUNT (' + cur + ')</th>' +
-          '</tr></thead><tbody>' + rowsHtml + '</tbody>' +
-        '</table>' +
-      '</td>' +
-    '</tr></table>' +
-
-    '<table width="100%" style="margin-top:14px;border-collapse:collapse;"><tr>' +
       '<td width="60%"></td>' +
-      '<td width="40%">' +
-        '<table width="100%" style="border-collapse:collapse;font-size:12px;">' +
-          totalsRow('SUBTOTAL', fmtInvoiceMoney_(invoice.Amount)) +
-          totalsRow('DISCOUNT', fmtInvoiceMoney_(invoice.Discount)) +
-          totalsRow('(TAX RATE)', fmtInvoiceMoney_(invoice.TaxRate)) +
-          totalsRow('TAX', fmtInvoiceMoney_(invoice.TaxAmount)) +
-        '</table>' +
+      '<td width="40%" style="border-top:2px solid #ccc;padding-top:10px;">' +
+        '<table width="100%" style="border-collapse:collapse;"><tr>' +
+          '<td style="font-size:20px;font-weight:800;color:' + NAVY + ';">TOTAL</td>' +
+          '<td style="text-align:right;font-size:20px;font-weight:800;color:' + NAVY + ';">' + fmtInvoiceMoney_(invoice.TotalAmount) + '</td>' +
+        '</tr></table>' +
       '</td>' +
     '</tr></table>' +
-
-    '<div style="border-top:2px solid #ccc;margin-top:10px;padding-top:12px;text-align:right;">' +
-      '<div style="color:#888;font-size:12px;letter-spacing:.06em;">INVOICE TOTAL</div>' +
-      '<div style="font-size:30px;color:#333;">' + fmtInvoiceMoney_(invoice.TotalAmount) + '</div>' +
-    '</div>' +
 
     termsHtml +
   '</div>' +

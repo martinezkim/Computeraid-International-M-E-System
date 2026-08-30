@@ -264,7 +264,7 @@
                 <option value="">— None —</option>
                 <option value="Monthly Stipends">Monthly Stipends</option>
               </select>
-              <div class="form-text">Tagging as "Monthly Stipends" files this under the Admin's Salaries tab instead of Invoices.</div>
+              <div class="form-text">Tagging as "Monthly Stipends" files this under the Admin's Salaries tab instead of Invoices, and drops the Days column below (a stipend isn't priced per day).</div>
             </div>
           </div>
 
@@ -274,8 +274,9 @@
               <thead>
                 <tr>
                   <th>Description</th>
-                  <th style="width:130px" class="text-end">Unit Cost</th>
-                  <th style="width:130px" class="text-end">Qty/Day Rate</th>
+                  <th style="width:110px" class="text-end">Unit Cost</th>
+                  <th style="width:90px" class="text-end">Quantity</th>
+                  <th style="width:90px" class="text-end" id="myinvoice-days-header">Days</th>
                   <th style="width:140px" class="text-end">Amount</th>
                   <th style="width:36px"></th>
                 </tr>

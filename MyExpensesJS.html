@@ -64,6 +64,17 @@
     document.getElementById('btn-myinvoice-add-line').addEventListener('click', function () { addInvoiceLineRow(); });
     document.getElementById('myinvoice-discount').addEventListener('input', recalcInvoiceTotals);
     document.getElementById('myinvoice-taxrate').addEventListener('input', recalcInvoiceTotals);
+    document.getElementById('myinvoice-tag').addEventListener('change', function () {
+      updateDaysColumnVisibility();
+      document.querySelectorAll('#myinvoice-lineitems-body tr').forEach(function (tr) {
+        var unit = tr.querySelector('.li-unit'), qty = tr.querySelector('.li-qty'), days = tr.querySelector('.li-days'), amount = tr.querySelector('.li-amount');
+        if (unit.value !== '' && qty.value !== '') {
+          var multiplier = (invoiceUsesDays_() && days.value !== '') ? Number(days.value) : 1;
+          amount.value = (Number(unit.value) * Number(qty.value) * multiplier) || 0;
+        }
+      });
+      recalcInvoiceTotals();
+    });
 
     expenseDocUpload = initFinanceDocumentUpload({ inputId: 'myexpense-document-input', statusId: 'myexpense-document-status', documentType: 'Receipt' });
     reimbursementDocUpload = initFinanceDocumentUpload({ inputId: 'myreimbursement-document-input', statusId: 'myreimbursement-document-status', documentType: 'Receipt' });
@@ -366,6 +377,20 @@
   }
 
   // ---------- Submit / Resubmit Invoice (branded generated invoice) ----------
+  /** A stipend/salary line isn't priced per day — the Days column and its multiplier are dropped for those, kept for everything else. */
+  function invoiceUsesDays_() {
+    return document.getElementById('myinvoice-tag').value !== 'Monthly Stipends';
+  }
+
+  function updateDaysColumnVisibility() {
+    var usesDays = invoiceUsesDays_();
+    var header = document.getElementById('myinvoice-days-header');
+    if (header) header.style.display = usesDays ? '' : 'none';
+    document.querySelectorAll('#myinvoice-lineitems-body .li-days-cell').forEach(function (td) {
+      td.style.display = usesDays ? '' : 'none';
+    });
+  }
+
   function addInvoiceLineRow(item) {
     item = item || {};
     var tbody = document.getElementById('myinvoice-lineitems-body');
@@ -374,22 +399,29 @@
       '<td><input type="text" class="form-control form-control-sm li-desc" maxlength="200"></td>' +
       '<td><input type="number" class="form-control form-control-sm text-end li-unit" min="0" step="0.01"></td>' +
       '<td><input type="number" class="form-control form-control-sm text-end li-qty" min="0" step="0.01"></td>' +
+      '<td class="li-days-cell"><input type="number" class="form-control form-control-sm text-end li-days" min="0" step="1"></td>' +
       '<td><input type="number" class="form-control form-control-sm text-end li-amount" min="0" step="0.01"></td>' +
       '<td class="text-center"><button type="button" class="btn btn-sm btn-light text-danger li-remove" title="Remove"><i class="bi bi-x-lg"></i></button></td>';
     tr.querySelector('.li-desc').value = item.description || '';
     tr.querySelector('.li-unit').value = item.unitCost || '';
     tr.querySelector('.li-qty').value = item.qtyRate || '';
+    tr.querySelector('.li-days').value = item.days || '';
     tr.querySelector('.li-amount').value = item.amount || '';
 
     var unit = tr.querySelector('.li-unit');
     var qty = tr.querySelector('.li-qty');
+    var days = tr.querySelector('.li-days');
     var amount = tr.querySelector('.li-amount');
     function autoAmount() {
-      if (unit.value !== '' && qty.value !== '') amount.value = (Number(unit.value) * Number(qty.value)) || 0;
+      if (unit.value !== '' && qty.value !== '') {
+        var multiplier = (invoiceUsesDays_() && days.value !== '') ? Number(days.value) : 1;
+        amount.value = (Number(unit.value) * Number(qty.value) * multiplier) || 0;
+      }
       recalcInvoiceTotals();
     }
     unit.addEventListener('input', autoAmount);
     qty.addEventListener('input', autoAmount);
+    days.addEventListener('input', autoAmount);
     amount.addEventListener('input', recalcInvoiceTotals);
     tr.querySelector('.li-remove').addEventListener('click', function () {
       var rows = tbody.querySelectorAll('tr');
@@ -398,6 +430,7 @@
     });
 
     tbody.appendChild(tr);
+    updateDaysColumnVisibility();
   }
 
   function clearInvoiceRow(tr) {
@@ -410,6 +443,7 @@
         description: tr.querySelector('.li-desc').value.trim(),
         unitCost: Number(tr.querySelector('.li-unit').value) || 0,
         qtyRate: Number(tr.querySelector('.li-qty').value) || 0,
+        days: invoiceUsesDays_() ? (Number(tr.querySelector('.li-days').value) || 0) : 0,
         amount: Number(tr.querySelector('.li-amount').value) || 0
       };
     }).filter(function (it) { return it.description !== '' || it.amount !== 0; });
@@ -440,6 +474,7 @@
     document.getElementById('myinvoice-taxrate').value = '0';
     document.getElementById('myinvoice-tag').value = '';
     document.getElementById('myinvoice-lineitems-body').innerHTML = '';
+    updateDaysColumnVisibility();
     addInvoiceLineRow();
     recalcInvoiceTotals();
   }
@@ -465,6 +500,7 @@
     document.getElementById('myinvoice-discount').value = i.Discount || '0';
     document.getElementById('myinvoice-taxrate').value = i.TaxRate || '0';
     document.getElementById('myinvoice-tag').value = i.InvoiceTag || '';
+    updateDaysColumnVisibility();
 
     var items = [];
     try { items = JSON.parse(i.LineItemsJSON || '[]'); } catch (e) { items = []; }

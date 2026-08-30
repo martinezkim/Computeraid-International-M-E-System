@@ -20,8 +20,8 @@ var APP_CONFIG = {
   // Fixed "Billed To" block on a Hub-Manager-generated invoice (they
   // invoice Computer Aid International for their stipend / office costs).
   ORG_BILLING: {
-    name: 'Computer Aid International',
-    addressLines: ['33 Foley Street, London,', 'W1W 7TL, United Kingdom']
+    name: 'Computeraid Kenya',
+    addressLines: ['Sanlam House, Kenyatta Avenue,', '1st Floor, Suite No. 103.']
   }
 };
 
